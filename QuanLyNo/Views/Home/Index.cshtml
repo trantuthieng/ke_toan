@@ -1,0 +1,595 @@
+@model DashboardViewModel
+
+@{
+    ViewData["Title"] = "Quản Lý Công Nợ";
+    var today = Model.NgayHienTai;
+}
+
+<!-- BÁO CÁO TỔNG HỢP -->
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="card border-primary h-100">
+            <div class="card-body text-center">
+                <h6 class="card-title text-muted">Tổng nợ (gốc + mới)</h6>
+                <h3 class="text-primary">@Model.TongNo.ToString("#,##0") đ</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card border-success h-100">
+            <div class="card-body text-center">
+                <h6 class="card-title text-muted">Tổng đã trả</h6>
+                <h3 class="text-success">@Model.TongTra.ToString("#,##0") đ</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card border-danger h-100">
+            <div class="card-body text-center">
+                <h6 class="card-title text-muted">Tổng còn nợ</h6>
+                <h3 class="text-danger">@Model.TongConNo.ToString("#,##0") đ</h3>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- CHỌN NGÀY & EXCEL -->
+<div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <form method="get" class="d-flex align-items-center gap-2">
+        <label class="fw-bold">Ngày:</label>
+        <input type="date" name="ngay" value="@today.ToString("yyyy-MM-dd")" class="form-control form-control-sm" style="width:170px" onchange="this.form.submit()" />
+    </form>
+    <div class="ms-auto d-flex gap-1">
+        <div class="dropdown">
+            <button class="btn btn-sm btn-outline-success dropdown-toggle" data-bs-toggle="dropdown">
+                <i class="bi bi-download"></i> Export
+            </button>
+            <ul class="dropdown-menu">
+                <li><a class="dropdown-item" href="/Home/ExportExcel?loai=today">Giao dịch hôm nay</a></li>
+                <li><a class="dropdown-item" href="/Home/ExportExcel?loai=all">Tất cả giao dịch</a></li>
+                <li><hr class="dropdown-divider" /></li>
+                <li><a class="dropdown-item" href="/Home/ExportBaoCao">Báo cáo công nợ (7 ngày)</a></li>
+            </ul>
+        </div>
+        <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#importModal">
+            <i class="bi bi-upload"></i> Import Excel
+        </button>
+        <button class="btn btn-sm btn-outline-info" data-bs-toggle="modal" data-bs-target="#khachHangModal">
+            <i class="bi bi-person-plus"></i> Thêm khách
+        </button>
+    </div>
+</div>
+
+@if (TempData["Success"] != null)
+{
+    <div class="alert alert-success alert-dismissible fade show">
+        <i class="bi bi-check-circle"></i> @TempData["Success"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert-danger alert-dismissible fade show">
+        <i class="bi bi-exclamation-circle"></i> @TempData["Error"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+<!-- 3 TABS -->
+<ul class="nav nav-tabs" id="mainTabs" role="tablist">
+    <li class="nav-item">
+        <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-no-moi" type="button">
+            <i class="bi bi-plus-circle"></i> Nhập nợ hôm nay
+            <span class="badge bg-primary">@Model.NoMoiHomNay.Count</span>
+        </button>
+    </li>
+    <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-tra-no" type="button">
+            <i class="bi bi-cash-stack"></i> Trả nợ hôm nay
+            <span class="badge bg-success">@Model.NoTraHomNay.Count</span>
+        </button>
+    </li>
+    <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-con-lai" type="button">
+            <i class="bi bi-exclamation-triangle"></i> Tổng nợ theo khách
+            <span class="badge bg-danger">@Model.ThongKeNoTheoKhach.Count</span>
+        </button>
+    </li>
+    <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-hoan-thien" type="button" id="btn-tab-hoan-thien">
+            <i class="bi bi-images"></i> Hoàn thiện dữ liệu
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content border border-top-0 rounded-bottom p-3">
+    <!-- TAB 1: NỢ MỚI HÔM NAY -->
+    <div class="tab-pane fade show active" id="tab-no-moi">
+        <h5 class="mb-3">Nhập nợ mới - @today.ToString("dd/MM/yyyy")</h5>
+
+        <form asp-action="ThemGiaoDich" method="post" class="row g-2 mb-3 align-items-end bg-light p-3 rounded">
+            <input type="hidden" name="Ngay" value="@today.ToString("yyyy-MM-dd")" />
+            <div class="col-md-2">
+                <label class="form-label small">Lái (khách bán)</label>
+                <input type="text" name="TenLai" class="form-control form-control-sm" autocomplete="off" />
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small">Khách mua</label>
+                <input type="text" name="TenKhach" class="form-control form-control-sm" list="danhSachKhach" autocomplete="off" />
+            </div>
+            <div class="col-md-1">
+                <label class="form-label small">SC</label>
+                <input type="number" step="0.5" name="SoCon" class="form-control form-control-sm" />
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small">SL (kg)</label>
+                <input type="number" step="0.1" name="SoLuong" class="form-control form-control-sm" required />
+            </div>
+            <div class="col-md-1">
+                <label class="form-label small">Giá</label>
+                <input type="number" name="Gia" class="form-control form-control-sm" required />
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small">Thành tiền</label>
+                <input type="number" name="ThanhTien" class="form-control form-control-sm" placeholder="Tự tính" />
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small">Tiền trả lái</label>
+                <input type="number" name="TienTraLai" value="0" class="form-control form-control-sm" />
+            </div>
+            <div class="col-md-1">
+                <label class="form-label small">Ghi chú</label>
+                <input type="text" name="GhiChu" class="form-control form-control-sm" />
+            </div>
+            <div class="col-md-1">
+                <button type="submit" class="btn btn-primary btn-sm w-100">
+                    <i class="bi bi-plus"></i> Thêm
+                </button>
+            </div>
+        </form>
+
+        <datalist id="danhSachKhach">
+            @foreach (var kh in Model.DanhSachKhach)
+            {
+                <option value="@kh.TenKhach" />
+            }
+        </datalist>
+
+        @if (Model.NoMoiHomNay.Any())
+        {
+            <div class="table-responsive">
+                <table class="table table-sm table-striped table-hover">
+                    <thead class="table-primary">
+                        <tr>
+                            <th>#</th>
+                            <th>Lái</th>
+                            <th>Khách mua</th>
+                            <th class="text-end">SC</th>
+                            <th class="text-end">SL (kg)</th>
+                            <th class="text-end">Giá</th>
+                            <th class="text-end">Thành tiền</th>
+                            <th class="text-end">Tiền trả lái</th>
+                            <th>Ghi chú</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @{ int stt = 1; string lastLai = ""; }
+                        @foreach (var gd in Model.NoMoiHomNay)
+                        {
+                            string lai = gd.TenLai ?? "";
+                            bool isNewGroup = lai != lastLai;
+                            if (isNewGroup && lastLai != "")
+                            {
+                                // Subtotal for previous lái
+                                var prevItems = Model.NoMoiHomNay.Where(x => (x.TenLai ?? "") == lastLai);
+                                <tr class="table-info fw-bold small">
+                                    <td colspan="3" class="text-end">Cộng @lastLai:</td>
+                                    <td class="text-end">@prevItems.Sum(x => x.SoCon).ToString("#,##0.#")</td>
+                                    <td class="text-end">@prevItems.Sum(x => x.SoLuong).ToString("#,##0.#")</td>
+                                    <td></td>
+                                    <td class="text-end">@prevItems.Sum(x => x.ThanhTien).ToString("#,##0")</td>
+                                    <td class="text-end">@prevItems.Sum(x => x.TienTraLai).ToString("#,##0")</td>
+                                    <td colspan="2"></td>
+                                </tr>
+                            }
+                            lastLai = lai;
+                            <tr>
+                                <td>@(stt++)</td>
+                                <td class="fw-semibold">@(isNewGroup ? lai : "")</td>
+                                <td>@gd.TenKhach</td>
+                                <td class="text-end">@gd.SoCon.ToString("#,##0.#")</td>
+                                <td class="text-end">@gd.SoLuong.ToString("#,##0.#")</td>
+                                <td class="text-end">@gd.Gia.ToString("#,##0")</td>
+                                <td class="text-end fw-bold">@gd.ThanhTien.ToString("#,##0")</td>
+                                <td class="text-end">@gd.TienTraLai.ToString("#,##0")</td>
+                                <td>@gd.GhiChu</td>
+                                <td>
+                                    <div class="btn-group btn-group-sm">
+                                        <button class="btn btn-outline-warning btn-edit" data-id="@gd.Id" data-bs-toggle="modal" data-bs-target="#editModal">
+                                            <i class="bi bi-pencil"></i>
+                                        </button>
+                                        <form asp-action="XoaGiaoDich" method="post" class="d-inline" onsubmit="return confirm('Xóa giao dịch này?')">
+                                            <input type="hidden" name="id" value="@gd.Id" />
+                                            <button type="submit" class="btn btn-outline-danger"><i class="bi bi-trash"></i></button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                        @if (lastLai != "")
+                        {
+                            var lastItems = Model.NoMoiHomNay.Where(x => (x.TenLai ?? "") == lastLai);
+                            <tr class="table-info fw-bold small">
+                                <td colspan="3" class="text-end">Cộng @lastLai:</td>
+                                <td class="text-end">@lastItems.Sum(x => x.SoCon).ToString("#,##0.#")</td>
+                                <td class="text-end">@lastItems.Sum(x => x.SoLuong).ToString("#,##0.#")</td>
+                                <td></td>
+                                <td class="text-end">@lastItems.Sum(x => x.ThanhTien).ToString("#,##0")</td>
+                                <td class="text-end">@lastItems.Sum(x => x.TienTraLai).ToString("#,##0")</td>
+                                <td colspan="2"></td>
+                            </tr>
+                        }
+                    </tbody>
+                    <tfoot>
+                        <tr class="fw-bold table-warning">
+                            <td colspan="3" class="text-end">TỔNG CỘNG:</td>
+                            <td class="text-end">@Model.NoMoiHomNay.Sum(g => g.SoCon).ToString("#,##0.#")</td>
+                            <td class="text-end">@Model.NoMoiHomNay.Sum(g => g.SoLuong).ToString("#,##0.#")</td>
+                            <td></td>
+                            <td class="text-end">@Model.NoMoiHomNay.Sum(g => g.ThanhTien).ToString("#,##0")</td>
+                            <td class="text-end">@Model.NoMoiHomNay.Sum(g => g.TienTraLai).ToString("#,##0")</td>
+                            <td colspan="2"></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        }
+        else
+        {
+            <p class="text-muted fst-italic">Chưa có giao dịch nào trong ngày @today.ToString("dd/MM/yyyy")</p>
+        }
+    </div>
+
+    <!-- TAB 2: TRẢ NỢ HÔM NAY -->
+    <div class="tab-pane fade" id="tab-tra-no">
+        <h5 class="mb-3">Trả nợ - @today.ToString("dd/MM/yyyy")</h5>
+
+        <form asp-action="ThemTraNo" method="post" class="row g-2 mb-3 align-items-end bg-light p-3 rounded">
+            <input type="hidden" name="NgayTra" value="@today.ToString("yyyy-MM-dd")" />
+            <div class="col-md-4">
+                <label class="form-label small">Khách hàng</label>
+                <input type="text" name="TenKhach" class="form-control form-control-sm" list="danhSachKhach" required autocomplete="off" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small">Số tiền trả</label>
+                <input type="number" name="SoTienTra" class="form-control form-control-sm" required />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small">Ghi chú</label>
+                <input type="text" name="GhiChu" class="form-control form-control-sm" />
+            </div>
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-success btn-sm w-100">
+                    <i class="bi bi-check"></i> Ghi nhận trả nợ
+                </button>
+            </div>
+        </form>
+
+        @if (Model.NoTraHomNay.Any())
+        {
+            <div class="table-responsive">
+                <table class="table table-sm table-striped table-hover">
+                    <thead class="table-success">
+                        <tr>
+                            <th>#</th>
+                            <th>Khách hàng</th>
+                            <th class="text-end">Số tiền trả</th>
+                            <th>Ghi chú</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @{ int stt2 = 1; }
+                        @foreach (var tn in Model.NoTraHomNay)
+                        {
+                            <tr>
+                                <td>@(stt2++)</td>
+                                <td>@tn.TenKhach</td>
+                                <td class="text-end fw-bold text-success">@tn.SoTienTra.ToString("#,##0")</td>
+                                <td>@tn.GhiChu</td>
+                                <td>
+                                    <form asp-action="XoaTraNo" method="post" class="d-inline" onsubmit="return confirm('Xóa phiếu trả nợ này?')">
+                                        <input type="hidden" name="id" value="@tn.Id" />
+                                        <button type="submit" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i></button>
+                                    </form>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                    <tfoot>
+                        <tr class="fw-bold table-warning">
+                            <td colspan="2" class="text-end">Tổng thu hôm nay:</td>
+                            <td class="text-end text-success">@Model.NoTraHomNay.Sum(t => t.SoTienTra).ToString("#,##0")</td>
+                            <td colspan="2"></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        }
+        else
+        {
+            <p class="text-muted fst-italic">Chưa có khoản trả nợ nào trong ngày @today.ToString("dd/MM/yyyy")</p>
+        }
+    </div>
+
+    <!-- TAB 3: BÁO CÁO CÔNG NỢ (dạng bảng giống file BÁO CÁO) -->
+    <div class="tab-pane fade" id="tab-con-lai">
+        <h5 class="mb-3 text-center text-danger fw-bold">
+            <i class="bi bi-file-earmark-spreadsheet"></i> BÁO CÁO CÔNG NỢ NGÀY @Model.NgayHienTai.ToString("dd-M")
+        </h5>
+
+        @if (Model.ThongKeNoTheoKhach.Any())
+        {
+            var cacNgay = Model.CacNgay;
+            var tongNoTheoNgay = new Dictionary<DateTime, decimal>();
+            var tongTraTheoNgay = new Dictionary<DateTime, decimal>();
+            foreach (var d in cacNgay)
+            {
+                tongNoTheoNgay[d] = Model.ThongKeNoTheoKhach.Sum(tk => tk.ChiTietTheoNgay.ContainsKey(d) ? tk.ChiTietTheoNgay[d].No : 0);
+                tongTraTheoNgay[d] = Model.ThongKeNoTheoKhach.Sum(tk => tk.ChiTietTheoNgay.ContainsKey(d) ? tk.ChiTietTheoNgay[d].Tra : 0);
+            }
+
+            <div class="table-responsive">
+                <table class="table table-sm table-bordered table-hover" style="font-size: 0.82rem;">
+                    <thead>
+                        <!-- Row 1: group headers -->
+                        <tr class="table-danger text-center">
+                            <th rowspan="2" style="min-width:30px; vertical-align:middle">#</th>
+                            <th rowspan="2" style="min-width:120px; vertical-align:middle">Khách hàng</th>
+                            <th rowspan="2" style="min-width:80px; vertical-align:middle">Nợ cũ</th>
+                            @foreach (var d in cacNgay)
+                            {
+                                <th colspan="2" class="@(d.Date == DateTime.Today ? "table-warning" : "")">
+                                    @d.ToString("dd-M")
+                                </th>
+                            }
+                            <th rowspan="2" style="min-width:90px; vertical-align:middle" class="table-dark text-white">Tổng nợ</th>
+                        </tr>
+                        <!-- Row 2: Nợ/Trả sub-headers -->
+                        <tr class="table-danger text-center">
+                            @foreach (var d in cacNgay)
+                            {
+                                <th class="@(d.Date == DateTime.Today ? "table-warning" : "")" style="min-width:70px">Nợ</th>
+                                <th class="@(d.Date == DateTime.Today ? "table-warning" : "")" style="min-width:70px">Trả</th>
+                            }
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @{ int stt3 = 1; }
+                        @foreach (var tk in Model.ThongKeNoTheoKhach.OrderByDescending(x => x.ConNo))
+                        {
+                            <tr class="@(tk.ConNo < 0 ? "table-success" : "")">
+                                <td class="text-center">@(stt3++)</td>
+                                <td class="fw-semibold text-nowrap">@tk.TenKhach</td>
+                                <td class="text-end">@(tk.NoCu != 0 ? tk.NoCu.ToString("#,##0") : "")</td>
+                                @foreach (var d in cacNgay)
+                                {
+                                    var hasData = tk.ChiTietTheoNgay.ContainsKey(d);
+                                    var no = hasData ? tk.ChiTietTheoNgay[d].No : 0;
+                                    var tra = hasData ? tk.ChiTietTheoNgay[d].Tra : 0;
+                                    var isToday = d.Date == DateTime.Today;
+                                    <td class="text-end @(isToday ? "table-warning" : "")">@(no != 0 ? no.ToString("#,##0") : "")</td>
+                                    <td class="text-end @(isToday ? "table-warning" : "") @(tra != 0 ? "text-success" : "")">@(tra != 0 ? tra.ToString("#,##0") : "")</td>
+                                }
+                                <td class="text-end fw-bold @(tk.ConNo < 0 ? "text-success" : "text-danger")">
+                                    @tk.ConNo.ToString("#,##0")
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                    <tfoot>
+                        <tr class="fw-bold table-warning">
+                            <td colspan="2" class="text-end">TỔNG:</td>
+                            <td class="text-end">@Model.ThongKeNoTheoKhach.Sum(x => x.NoCu).ToString("#,##0")</td>
+                            @foreach (var d in cacNgay)
+                            {
+                                <td class="text-end">@(tongNoTheoNgay[d] != 0 ? tongNoTheoNgay[d].ToString("#,##0") : "")</td>
+                                <td class="text-end text-success">@(tongTraTheoNgay[d] != 0 ? tongTraTheoNgay[d].ToString("#,##0") : "")</td>
+                            }
+                            <td class="text-end text-danger">@Model.ThongKeNoTheoKhach.Sum(x => x.ConNo).ToString("#,##0")</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        }
+        else
+        {
+            <p class="text-muted fst-italic">Chưa có dữ liệu công nợ.</p>
+        }
+    </div>
+
+    <!-- TAB 4: HOÀN THIỆN DỮ LIỆU (Upload ảnh + điền tên khách mua) -->
+    <div class="tab-pane fade" id="tab-hoan-thien">
+        <h5 class="mb-3">
+            <i class="bi bi-images"></i> Hoàn thiện dữ liệu từ ảnh - @today.ToString("dd/MM/yyyy")
+        </h5>
+
+        <!-- Upload ảnh -->
+        <div class="card mb-3">
+            <div class="card-header bg-info text-white">
+                <i class="bi bi-cloud-upload"></i> Upload ảnh chụp (sổ ghi tay)
+            </div>
+            <div class="card-body">
+                <form asp-action="UploadImages" method="post" enctype="multipart/form-data" class="d-flex gap-2 align-items-end">
+                    <input type="hidden" name="ngay" value="@today.ToString("yyyy-MM-dd")" />
+                    <div class="flex-grow-1">
+                        <input type="file" name="files" class="form-control" accept="image/*" multiple required />
+                    </div>
+                    <button type="submit" class="btn btn-info text-white">
+                        <i class="bi bi-upload"></i> Upload
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Layout 2 cột: ảnh bên trái, bảng dữ liệu bên phải -->
+        <div class="row">
+            <!-- Cột ảnh -->
+            <div class="col-md-5">
+                <div class="card">
+                    <div class="card-header bg-secondary text-white d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-image"></i> Ảnh đã upload</span>
+                        <button class="btn btn-sm btn-outline-light" id="btnRefreshImages">
+                            <i class="bi bi-arrow-clockwise"></i>
+                        </button>
+                    </div>
+                    <div class="card-body p-2" id="imageGallery" style="max-height: 600px; overflow-y: auto;">
+                        <p class="text-muted text-center">Đang tải ảnh...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Cột bảng dữ liệu cần hoàn thiện -->
+            <div class="col-md-7">
+                <div class="card">
+                    <div class="card-header bg-warning d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-pencil-square"></i> Giao dịch chưa có tên khách mua</span>
+                        <button class="btn btn-sm btn-success" id="btnSaveKhachMua">
+                            <i class="bi bi-check-all"></i> Lưu tất cả
+                        </button>
+                    </div>
+                    <div class="card-body p-2" style="max-height: 600px; overflow-y: auto;">
+                        <div id="incompleteRecords">
+                            <p class="text-muted text-center">Đang tải dữ liệu...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: IMPORT EXCEL -->
+<div class="modal fade" id="importModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form asp-action="ImportExcel" method="post" enctype="multipart/form-data">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title"><i class="bi bi-upload"></i> Import Excel</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Chọn file Excel (.xlsx)</label>
+                        <input type="file" name="file" class="form-control" accept=".xlsx,.xls" required />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Ngày giao dịch (cho file hàng ngày)</label>
+                        <input type="date" name="ngayGiaoDich" value="@today.ToString("yyyy-MM-dd")" class="form-control" />
+                    </div>
+                    <div class="alert alert-info small mb-0">
+                        <strong>Hỗ trợ 2 loại file:</strong><br />
+                        <b>1. File hàng ngày:</b> KH | SC | SL | Giá | T.Tiền | TiềnLái<br />
+                        <b>2. BÁO CÁO công nợ:</b> Tự động nhận diện, import khách hàng + nợ cũ + giao dịch
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
+                    <button type="submit" class="btn btn-primary"><i class="bi bi-upload"></i> Import</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: THÊM KHÁCH HÀNG -->
+<div class="modal fade" id="khachHangModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form asp-action="ThemKhachHang" method="post">
+                <div class="modal-header bg-info text-white">
+                    <h5 class="modal-title"><i class="bi bi-person-plus"></i> Thêm / Cập nhật Khách hàng</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Tên khách hàng</label>
+                        <input type="text" name="TenKhach" class="form-control" required />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Nợ cũ (số dư đầu kỳ)</label>
+                        <input type="number" name="NoCu" value="0" class="form-control" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Ghi chú</label>
+                        <input type="text" name="GhiChu" class="form-control" />
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
+                    <button type="submit" class="btn btn-info"><i class="bi bi-check"></i> Lưu</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: SỬA GIAO DỊCH -->
+<div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <form asp-action="SuaGiaoDich" method="post">
+                <div class="modal-header bg-warning">
+                    <h5 class="modal-title"><i class="bi bi-pencil"></i> Sửa giao dịch</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" name="Id" id="edit-Id" />
+                    <div class="row g-3">
+                        <div class="col-md-3">
+                            <label class="form-label">Ngày</label>
+                            <input type="date" name="Ngay" id="edit-Ngay" class="form-control" required />
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Lái (khách bán)</label>
+                            <input type="text" name="TenLai" id="edit-TenLai" class="form-control" />
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Khách mua</label>
+                            <input type="text" name="TenKhach" id="edit-TenKhach" class="form-control" list="danhSachKhach" />
+                        </div>
+                        <div class="col-md-1">
+                            <label class="form-label">SC</label>
+                            <input type="number" step="0.5" name="SoCon" id="edit-SoCon" class="form-control" />
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label">SL (kg)</label>
+                            <input type="number" step="0.1" name="SoLuong" id="edit-SoLuong" class="form-control" required />
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Giá</label>
+                            <input type="number" name="Gia" id="edit-Gia" class="form-control" required />
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Thành tiền</label>
+                            <input type="number" name="ThanhTien" id="edit-ThanhTien" class="form-control" />
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Tiền trả lái</label>
+                            <input type="number" name="TienTraLai" id="edit-TienTraLai" class="form-control" />
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Ghi chú</label>
+                            <input type="text" name="GhiChu" id="edit-GhiChu" class="form-control" />
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
+                    <button type="submit" class="btn btn-warning"><i class="bi bi-check"></i> Lưu</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>

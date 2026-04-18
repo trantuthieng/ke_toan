@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Quản Lý Nợ</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="~/css/site.css" />
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+            <a class="navbar-brand fw-bold" href="/">
+                <i class="bi bi-journal-text"></i> Quản Lý Nợ
+            </a>
+        </div>
+    </nav>
+
+    <main class="container mt-3 mb-5">
+        @if (TempData["Success"] != null)
+        {
+            <div class="alert alert-success alert-dismissible fade show">
+                <i class="bi bi-check-circle"></i> @TempData["Success"]
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        }
+        @if (TempData["Error"] != null)
+        {
+            <div class="alert alert-danger alert-dismissible fade show">
+                <i class="bi bi-exclamation-circle"></i> @TempData["Error"]
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        }
+        @if (TempData["SoSanhCount"] != null)
+        {
+            <div class="alert alert-info alert-dismissible fade show">
+                <h6><i class="bi bi-clipboard-check"></i> Kết quả so sánh với sổ tay:</h6>
+                <ul class="mb-0">
+                    <li>Tổng dòng: <strong>@TempData["SoSanhCount"]</strong></li>
+                    <li class="text-success">Khớp: <strong>@TempData["SoSanhKhop"]</strong></li>
+                    <li class="text-danger">Sai lệch: <strong>@TempData["SoSanhSaiLech"]</strong></li>
+                    <li class="text-warning">Mới (chưa có): <strong>@TempData["SoSanhMoi"]</strong></li>
+                    <li class="text-secondary">Thiếu trong file: <strong>@TempData["SoSanhThieu"]</strong></li>
+                </ul>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        }
+        @RenderBody()
+    </main>
+
+    <footer class="bg-light py-3 mt-auto border-top">
+        <div class="container text-center text-muted small">
+            &copy; @DateTime.Now.Year - Quản Lý Nợ
+        </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="~/js/site.js"></script>
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>
