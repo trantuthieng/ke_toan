@@ -10,12 +10,14 @@ public class ImageImportService
 
     private readonly AppDbContext _db;
     private readonly IWebHostEnvironment _env;
+    private readonly IConfiguration _configuration;
     private readonly GeminiImageParser _parser;
 
     public ImageImportService(AppDbContext db, IWebHostEnvironment env, IConfiguration configuration)
     {
         _db = db;
         _env = env;
+        _configuration = configuration;
         _parser = new GeminiImageParser(configuration);
     }
 
@@ -115,7 +117,7 @@ public class ImageImportService
     private async Task<ImageImportBatch> CreateBatchAsync(IFormFile file, DateTime ngay, string loaiImport,
         string nguonBanHang, CancellationToken cancellationToken)
     {
-        var uploadsDir = Path.Combine(_env.WebRootPath, "uploads", "image-imports");
+        var uploadsDir = Path.Combine(GetUploadsRoot(), "image-imports");
         Directory.CreateDirectory(uploadsDir);
 
         var storedFileName = BuildSafeFileName(file.FileName);
@@ -160,6 +162,14 @@ public class ImageImportService
 
         await MatchRowsAsync(batch, cancellationToken);
         return batch;
+    }
+
+    private string GetUploadsRoot()
+    {
+        var configured = _configuration["Uploads:RootPath"] ?? Environment.GetEnvironmentVariable("UPLOADS_ROOT");
+        return string.IsNullOrWhiteSpace(configured)
+            ? Path.Combine(_env.WebRootPath, "uploads")
+            : configured;
     }
 
     private async Task MatchRowsAsync(ImageImportBatch batch, CancellationToken cancellationToken)

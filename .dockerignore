@@ -1,0 +1,10 @@
+.git
+.dotnet
+**/bin
+**/obj
+**/.vs
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/wwwroot/uploads
+QuanLyNo/appsettings.Development.json

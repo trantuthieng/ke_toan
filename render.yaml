@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: quanlyno
+    runtime: docker
+    envVars:
+      # Set this in Render to:
+      # postgresql://postgres:<YOUR-PASSWORD>@db.mvhehqdabwooofisubvm.supabase.co:5432/postgres
+      - key: DATABASE_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: UPLOADS_ROOT
+        value: /app/uploads

@@ -13,12 +13,14 @@ public class HomeController : Controller
     private readonly AppDbContext _db;
     private readonly ExcelService _excel = new();
     private readonly IWebHostEnvironment _env;
+    private readonly IConfiguration _configuration;
     private readonly ImageImportService _imageImports;
 
     public HomeController(AppDbContext db, IWebHostEnvironment env, IConfiguration configuration)
     {
         _db = db;
         _env = env;
+        _configuration = configuration;
         _imageImports = new ImageImportService(db, env, configuration);
     }
 
@@ -713,7 +715,7 @@ public class HomeController : Controller
     [HttpGet]
     public IActionResult GetUploadedImages()
     {
-        var uploadsDir = Path.Combine(_env.WebRootPath, "uploads");
+        var uploadsDir = GetUploadsRoot();
         if (!Directory.Exists(uploadsDir))
             return Json(new List<string>());
 
@@ -757,13 +759,21 @@ public class HomeController : Controller
     {
         if (string.IsNullOrWhiteSpace(fileName)) return BadRequest();
         var safeName = Path.GetFileName(fileName); // prevent path traversal
-        var uploadsDir = Path.Combine(_env.WebRootPath, "uploads");
+        var uploadsDir = GetUploadsRoot();
         var filePath = Directory.Exists(uploadsDir)
             ? Directory.GetFiles(uploadsDir, safeName, SearchOption.AllDirectories).FirstOrDefault()
             : null;
         if (System.IO.File.Exists(filePath))
             System.IO.File.Delete(filePath);
         return Ok();
+    }
+
+    private string GetUploadsRoot()
+    {
+        var configured = _configuration["Uploads:RootPath"] ?? Environment.GetEnvironmentVariable("UPLOADS_ROOT");
+        return string.IsNullOrWhiteSpace(configured)
+            ? Path.Combine(_env.WebRootPath, "uploads")
+            : configured;
     }
 
     [HttpPost]

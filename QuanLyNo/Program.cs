@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.FileProviders;
+using Npgsql;
 using QuanLyNo.Data;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -6,7 +8,13 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllersWithViews();
 
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlite(builder.Configuration.GetConnectionString("DefaultConnection")));
+{
+    var connectionString = GetDatabaseConnectionString(builder.Configuration);
+    if (IsPostgresConnectionString(connectionString))
+        options.UseNpgsql(ToNpgsqlConnectionString(connectionString));
+    else
+        options.UseSqlite(connectionString);
+});
 
 var app = builder.Build();
 
@@ -14,26 +22,36 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.EnsureCreated();
-    EnsureColumn(db, "KhachHangs", "TraNoCu", "TEXT NOT NULL DEFAULT '0'");
-    EnsureColumn(db, "GiaoDichs", "SoLuongAnh", "TEXT NULL");
-    EnsureColumn(db, "GiaoDichs", "NguonBanHang", "TEXT NULL");
-    EnsureColumn(db, "GiaoDichs", "ImageOrder", "INTEGER NULL");
-    EnsureColumn(db, "GiaoDichs", "ImageImportRowId", "INTEGER NULL");
-    EnsureColumn(db, "GiaoDichs", "ReviewStatus", "TEXT NULL");
-    EnsureColumn(db, "TraNos", "TenLai", "TEXT NULL");
-    EnsureColumn(db, "TraNos", "NguonBanHang", "TEXT NULL");
-    EnsureColumn(db, "TraNos", "ImageOrder", "INTEGER NULL");
-    EnsureColumn(db, "TraNos", "ImageImportRowId", "INTEGER NULL");
-    EnsureColumn(db, "TraNos", "ReviewStatus", "TEXT NULL");
-    EnsureImageImportSchema(db);
+    if (db.Database.IsSqlite())
+    {
+        EnsureColumn(db, "KhachHangs", "TraNoCu", "TEXT NOT NULL DEFAULT '0'");
+        EnsureColumn(db, "GiaoDichs", "SoLuongAnh", "TEXT NULL");
+        EnsureColumn(db, "GiaoDichs", "NguonBanHang", "TEXT NULL");
+        EnsureColumn(db, "GiaoDichs", "ImageOrder", "INTEGER NULL");
+        EnsureColumn(db, "GiaoDichs", "ImageImportRowId", "INTEGER NULL");
+        EnsureColumn(db, "GiaoDichs", "ReviewStatus", "TEXT NULL");
+        EnsureColumn(db, "TraNos", "TenLai", "TEXT NULL");
+        EnsureColumn(db, "TraNos", "NguonBanHang", "TEXT NULL");
+        EnsureColumn(db, "TraNos", "ImageOrder", "INTEGER NULL");
+        EnsureColumn(db, "TraNos", "ImageImportRowId", "INTEGER NULL");
+        EnsureColumn(db, "TraNos", "ReviewStatus", "TEXT NULL");
+        EnsureImageImportSchema(db);
+    }
 }
 
 if (!app.Environment.IsDevelopment())
 {
-    app.UseExceptionHandler("/Home/Error");
+app.UseExceptionHandler("/Home/Error");
 }
 
 app.UseStaticFiles();
+var uploadsRoot = GetUploadsRoot(builder.Configuration, app.Environment);
+Directory.CreateDirectory(uploadsRoot);
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(uploadsRoot),
+    RequestPath = "/uploads"
+});
 app.UseRouting();
 app.UseAuthorization();
 
@@ -41,7 +59,55 @@ app.MapControllerRoute(
     name: "default",
     pattern: "{controller=Home}/{action=Index}/{id?}");
 
+var port = Environment.GetEnvironmentVariable("PORT");
+if (!string.IsNullOrWhiteSpace(port))
+    app.Urls.Add($"http://0.0.0.0:{port}");
+
 app.Run();
+
+static string GetDatabaseConnectionString(IConfiguration configuration)
+{
+    return configuration["DATABASE_URL"]
+        ?? Environment.GetEnvironmentVariable("DATABASE_URL")
+        ?? configuration.GetConnectionString("DefaultConnection")
+        ?? "Data Source=quanlyno.db";
+}
+
+static bool IsPostgresConnectionString(string connectionString)
+{
+    return connectionString.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase)
+        || connectionString.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase)
+        || connectionString.Contains("Host=", StringComparison.OrdinalIgnoreCase);
+}
+
+static string ToNpgsqlConnectionString(string connectionString)
+{
+    if (!connectionString.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) &&
+        !connectionString.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
+        return connectionString;
+
+    var uri = new Uri(connectionString);
+    var userInfo = uri.UserInfo.Split(':', 2);
+    var builder = new NpgsqlConnectionStringBuilder
+    {
+        Host = uri.Host,
+        Port = uri.IsDefaultPort ? 5432 : uri.Port,
+        Database = uri.AbsolutePath.TrimStart('/'),
+        Username = userInfo.Length > 0 ? Uri.UnescapeDataString(userInfo[0]) : "",
+        Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : "",
+        SslMode = SslMode.Require
+    };
+
+    return builder.ConnectionString;
+}
+
+static string GetUploadsRoot(IConfiguration configuration, IWebHostEnvironment env)
+{
+    var configured = configuration["Uploads:RootPath"] ?? Environment.GetEnvironmentVariable("UPLOADS_ROOT");
+    return string.IsNullOrWhiteSpace(configured)
+        ? Path.Combine(env.WebRootPath, "uploads")
+        : configured;
+}
 
 static void EnsureColumn(AppDbContext db, string tableName, string columnName, string columnDefinition)
 {
