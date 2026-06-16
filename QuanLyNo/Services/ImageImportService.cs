@@ -11,14 +11,14 @@ public class ImageImportService
     private readonly AppDbContext _db;
     private readonly IWebHostEnvironment _env;
     private readonly IConfiguration _configuration;
-    private readonly ClaudeImageParser _parser;
+    private readonly GeminiImageParser _parser;
 
     public ImageImportService(AppDbContext db, IWebHostEnvironment env, IConfiguration configuration)
     {
         _db = db;
         _env = env;
         _configuration = configuration;
-        _parser = new ClaudeImageParser(configuration);
+        _parser = new GeminiImageParser(configuration);
     }
 
     public async Task<List<ImageImportBatch>> CreateBatchesAsync(IEnumerable<IFormFile> files, DateTime ngay,
