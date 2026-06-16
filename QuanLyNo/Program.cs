@@ -88,14 +88,27 @@ static string ToNpgsqlConnectionString(string connectionString)
 
     var uri = new Uri(connectionString);
     var userInfo = uri.UserInfo.Split(':', 2);
+
+    // Resolve hostname to IPv4 — Render containers often lack IPv6 routing
+    var host = uri.Host;
+    try
+    {
+        var addresses = System.Net.Dns.GetHostAddresses(host);
+        var ipv4 = Array.Find(addresses,
+            a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
+        if (ipv4 != null) host = ipv4.ToString();
+    }
+    catch { }
+
     var builder = new NpgsqlConnectionStringBuilder
     {
-        Host = uri.Host,
+        Host = host,
         Port = uri.IsDefaultPort ? 5432 : uri.Port,
         Database = uri.AbsolutePath.TrimStart('/'),
         Username = userInfo.Length > 0 ? Uri.UnescapeDataString(userInfo[0]) : "",
         Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : "",
-        SslMode = SslMode.Require
+        SslMode = SslMode.Require,
+        TrustServerCertificate = true
     };
 
     return builder.ConnectionString;
