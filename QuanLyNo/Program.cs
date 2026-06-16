@@ -9,6 +9,12 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllersWithViews();
 
+// Persist DataProtection keys so antiforgery tokens survive container restarts
+var dpKeysPath = Environment.GetEnvironmentVariable("DATAPROTECTION_KEYS_PATH") ?? "/tmp/dp-keys";
+builder.Services.AddDataProtection()
+    .SetApplicationName("QuanLyNo")
+    .PersistKeysToFileSystem(new System.IO.DirectoryInfo(dpKeysPath));
+
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
     var connectionString = GetDatabaseConnectionString(builder.Configuration);
