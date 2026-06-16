@@ -18,8 +18,9 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 var app = builder.Build();
 
-using (var scope = app.Services.CreateScope())
+try
 {
+    using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.EnsureCreated();
     if (db.Database.IsSqlite())
@@ -37,6 +38,10 @@ using (var scope = app.Services.CreateScope())
         EnsureColumn(db, "TraNos", "ReviewStatus", "TEXT NULL");
         EnsureImageImportSchema(db);
     }
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"[startup] Database init failed (app will continue): {ex.Message}");
 }
 
 if (!app.Environment.IsDevelopment())
@@ -107,7 +112,7 @@ static string ToNpgsqlConnectionString(string connectionString)
         Database = uri.AbsolutePath.TrimStart('/'),
         Username = userInfo.Length > 0 ? Uri.UnescapeDataString(userInfo[0]) : "",
         Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : "",
-        SslMode = SslMode.Require,
+        SslMode = SslMode.Prefer,
         TrustServerCertificate = true
     };
 
