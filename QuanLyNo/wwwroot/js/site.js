@@ -131,8 +131,29 @@ document.addEventListener('DOMContentLoaded', function () {
 
     var imageImportForm = document.getElementById('imageImportForm');
     if (imageImportForm) {
-        imageImportForm.addEventListener('submit', function () {
+        imageImportForm.addEventListener('submit', function (e) {
+            e.preventDefault();
             setImageImportBusy(true);
+            var formData = new FormData(imageImportForm);
+            fetch('/Home/ImportImageBatch', {
+                method: 'POST',
+                body: formData
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                setImageImportBusy(false);
+                if (data && data.success) {
+                    imageImportForm.reset();
+                    loadImageImportReview();
+                    loadIncompleteRecords();
+                } else {
+                    alert('Lỗi upload: ' + (data && data.error ? data.error : 'Không rõ nguyên nhân.'));
+                }
+            })
+            .catch(function (err) {
+                setImageImportBusy(false);
+                alert('Lỗi kết nối: ' + err);
+            });
         });
     }
 
