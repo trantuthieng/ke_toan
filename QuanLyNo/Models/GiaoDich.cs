@@ -29,6 +29,10 @@ public class GiaoDich
     [Column(TypeName = "decimal(18,2)")]
     public decimal SoLuong { get; set; }
 
+    [Display(Name = "Số lượng từ ảnh (kg)")]
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal? SoLuongAnh { get; set; }
+
     [Required]
     [Display(Name = "Giá")]
     [Column(TypeName = "decimal(18,2)")]
@@ -42,6 +46,16 @@ public class GiaoDich
     [Display(Name = "Tiền trả lái")]
     [Column(TypeName = "decimal(18,0)")]
     public decimal TienTraLai { get; set; }
+
+    [MaxLength(50)]
+    public string? NguonBanHang { get; set; }
+
+    public int? ImageOrder { get; set; }
+
+    public int? ImageImportRowId { get; set; }
+
+    [MaxLength(50)]
+    public string? ReviewStatus { get; set; }
 
     [Display(Name = "Ghi chú")]
     [MaxLength(500)]

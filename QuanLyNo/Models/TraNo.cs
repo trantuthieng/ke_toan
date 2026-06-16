@@ -12,6 +12,10 @@ public class TraNo
     [MaxLength(200)]
     public string TenKhach { get; set; } = "";
 
+    [Display(Name = "Lái (khách bán)")]
+    [MaxLength(200)]
+    public string? TenLai { get; set; }
+
     [Required]
     [DataType(DataType.Date)]
     [Display(Name = "Ngày trả")]
@@ -21,6 +25,16 @@ public class TraNo
     [Display(Name = "Số tiền trả")]
     [Column(TypeName = "decimal(18,0)")]
     public decimal SoTienTra { get; set; }
+
+    [MaxLength(50)]
+    public string? NguonBanHang { get; set; }
+
+    public int? ImageOrder { get; set; }
+
+    public int? ImageImportRowId { get; set; }
+
+    [MaxLength(50)]
+    public string? ReviewStatus { get; set; }
 
     [Display(Name = "Ghi chú")]
     [MaxLength(500)]

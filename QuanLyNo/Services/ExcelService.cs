@@ -1,4 +1,6 @@
 using ClosedXML.Excel;
+using System.Globalization;
+using System.Text.RegularExpressions;
 using QuanLyNo.Models;
 using QuanLyNo.ViewModels;
 
@@ -16,6 +18,9 @@ public class ExcelService
         var allItems = new List<GiaoDich>();
         using var workbook = new XLWorkbook(stream);
         var ws = workbook.Worksheets.First();
+
+        if (IsKhachHangLaiFormat(ws))
+            return ImportKhachHangLaiFormat(ws, ngay);
 
         string currentLai = "";
         var group = new List<GiaoDich>();
@@ -68,6 +73,183 @@ public class ExcelService
 
         FlushGroup(currentLai, group, allItems);
         return allItems;
+    }
+
+    private List<GiaoDich> ImportKhachHangLaiFormat(IXLWorksheet ws, DateTime ngay)
+    {
+        var result = new List<GiaoDich>();
+        var pending = new List<GiaoDich>();
+        var currentLai = "";
+        var sellerFirst = FirstDataRowIsSeller(ws);
+        int lastRow = ws.LastRowUsed()?.RowNumber() ?? 0;
+
+        for (int r = 3; r <= lastRow; r++)
+        {
+            var row = ws.Row(r);
+            var ten = row.Cell(1).IsEmpty() ? "" : row.Cell(1).GetString().Trim();
+            if (string.IsNullOrWhiteSpace(ten)) continue;
+
+            var thanhTien = GetDecimal(row.Cell(5));
+            var soLuong = GetDecimal(row.Cell(3));
+            var gia = GetDecimal(row.Cell(4));
+
+            if (thanhTien == 0 && soLuong == 0 && gia == 0)
+            {
+                if (sellerFirst)
+                {
+                    currentLai = ten;
+                }
+                else
+                {
+                    foreach (var gd in pending)
+                        gd.TenLai = ten;
+                    result.AddRange(pending);
+                    pending.Clear();
+                }
+                continue;
+            }
+
+            if (thanhTien == 0 || soLuong == 0) continue;
+
+            var items = CreateSplitGiaoDichs(row, ngay, ten, sellerFirst ? currentLai : "");
+            if (sellerFirst)
+                result.AddRange(items);
+            else
+                pending.AddRange(items);
+        }
+
+        if (pending.Count > 0)
+        {
+            foreach (var gd in pending)
+                gd.TenLai = currentLai;
+            result.AddRange(pending);
+        }
+
+        return result;
+    }
+
+    private bool IsKhachHangLaiFormat(IXLWorksheet ws)
+    {
+        int lastRow = Math.Min(ws.LastRowUsed()?.RowNumber() ?? 0, 80);
+        int dataRows = 0;
+        int namedDataRows = 0;
+
+        for (int r = 3; r <= lastRow; r++)
+        {
+            var row = ws.Row(r);
+            var hasAmount = GetDecimal(row.Cell(5)) != 0;
+            var hasName = !string.IsNullOrWhiteSpace(row.Cell(1).GetString());
+
+            if (!hasAmount) continue;
+            dataRows++;
+            if (hasName) namedDataRows++;
+        }
+
+        return dataRows >= 5 && namedDataRows >= dataRows * 0.8m;
+    }
+
+    private bool FirstDataRowIsSeller(IXLWorksheet ws)
+    {
+        int lastRow = ws.LastRowUsed()?.RowNumber() ?? 0;
+        for (int r = 3; r <= lastRow; r++)
+        {
+            var row = ws.Row(r);
+            var hasName = !string.IsNullOrWhiteSpace(row.Cell(1).GetString());
+            if (!hasName) continue;
+
+            return GetDecimal(row.Cell(5)) == 0 &&
+                GetDecimal(row.Cell(3)) == 0 &&
+                GetDecimal(row.Cell(4)) == 0;
+        }
+
+        return false;
+    }
+
+    private List<GiaoDich> CreateSplitGiaoDichs(IXLRow row, DateTime ngay, string tenKhach, string tenLai)
+    {
+        var parts = GetSoLuongParts(row.Cell(3));
+        var soLuong = GetDecimal(row.Cell(3));
+        if (parts.Count == 0)
+            parts.Add(soLuong);
+
+        var soCon = GetDecimal(row.Cell(2));
+        var gia = GetDecimal(row.Cell(4));
+        var thanhTien = GetDecimal(row.Cell(5));
+        var tienTraLai = GetDecimal(row.Cell(6));
+        var splitThanhTien = SplitAmount(parts, thanhTien, gia);
+        var splitTienTraLai = SplitAmount(parts, tienTraLai, null);
+        var items = new List<GiaoDich>();
+
+        for (int i = 0; i < parts.Count; i++)
+        {
+            items.Add(new GiaoDich
+            {
+                Ngay = ngay,
+                TenLai = tenLai,
+                TenKhach = tenKhach,
+                SoCon = i == 0 ? soCon : 0,
+                SoLuong = parts[i],
+                Gia = gia,
+                ThanhTien = splitThanhTien[i],
+                TienTraLai = splitTienTraLai[i],
+                GhiChu = parts.Count > 1 ? $"Tách từ dòng Excel {row.RowNumber()}" : null
+            });
+        }
+
+        return items;
+    }
+
+    private static List<decimal> GetSoLuongParts(IXLCell cell)
+    {
+        var formula = cell.FormulaA1;
+        if (string.IsNullOrWhiteSpace(formula))
+            return new List<decimal>();
+
+        formula = formula.Trim().TrimStart('=');
+        if (!Regex.IsMatch(formula, @"^[0-9+\-.,()\s]+$"))
+            return new List<decimal>();
+
+        var parts = new List<decimal>();
+        foreach (Match match in Regex.Matches(formula, @"(?<sign>[+-]?)\s*(?<number>\d+(?:[.,]\d+)?)"))
+        {
+            var raw = match.Groups["number"].Value.Replace(',', '.');
+            if (!decimal.TryParse(raw, NumberStyles.Number, CultureInfo.InvariantCulture, out var value))
+                continue;
+
+            if (match.Groups["sign"].Value == "-")
+                value = -value;
+            parts.Add(value);
+        }
+
+        return parts.Count > 1 ? parts : new List<decimal>();
+    }
+
+    private static List<decimal> SplitAmount(List<decimal> quantities, decimal totalAmount, decimal? price)
+    {
+        var amounts = new List<decimal>();
+        if (quantities.Count == 0) return amounts;
+
+        if (totalAmount == 0)
+        {
+            amounts.AddRange(Enumerable.Repeat(0m, quantities.Count));
+            return amounts;
+        }
+
+        if (price.HasValue)
+        {
+            amounts.AddRange(quantities.Select(q => Math.Round(q * price.Value)));
+        }
+        else
+        {
+            var totalQuantity = quantities.Sum();
+            amounts.AddRange(totalQuantity == 0
+                ? Enumerable.Repeat(0m, quantities.Count)
+                : quantities.Select(q => Math.Round(totalAmount * q / totalQuantity)));
+        }
+
+        var diff = totalAmount - amounts.Sum();
+        amounts[^1] += diff;
+        return amounts;
     }
 
     private void FlushGroup(string lai, List<GiaoDich> items, List<GiaoDich> result)

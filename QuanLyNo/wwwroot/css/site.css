@@ -10,6 +10,31 @@ body {
     white-space: nowrap;
 }
 
+.table th.sortable-header {
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+    padding-right: 1.35rem;
+}
+
+.table th.sortable-header::after {
+    content: "↕";
+    position: absolute;
+    right: 0.45rem;
+    color: #6c757d;
+    font-size: 0.75rem;
+}
+
+.table th.sortable-header.sort-asc::after {
+    content: "↑";
+    color: #0d6efd;
+}
+
+.table th.sortable-header.sort-desc::after {
+    content: "↓";
+    color: #0d6efd;
+}
+
 .table td {
     vertical-align: middle;
 }
@@ -25,4 +50,91 @@ body {
 .badge {
     font-size: 0.7rem;
     vertical-align: middle;
+}
+
+.excel-grid input,
+.excel-grid select,
+.excel-grid textarea {
+    min-height: 32px;
+}
+
+.excel-active-cell {
+    outline: 2px solid rgba(13, 110, 253, 0.35);
+    outline-offset: -2px;
+}
+
+.cell-changed {
+    background-color: #fff3cd;
+    border-color: #f0ad4e;
+}
+
+.debt-entry-table {
+    font-size: 0.82rem;
+}
+
+.debt-entry-table .debt-lai-row td {
+    background: #eef4ff;
+    color: #0d47a1;
+}
+
+.debt-entry-table .debt-customer-total-row td {
+    background: #f8fafc;
+    font-weight: 600;
+}
+
+.debt-entry-table .needs-review td {
+    background: #fff8e1;
+}
+
+.debt-entry-table .image-mismatch td {
+    background: #fdecea;
+}
+
+.image-qty-cell,
+.excel-qty {
+    min-width: 72px;
+}
+
+.debt-pay-cell {
+    display: grid;
+    grid-template-columns: minmax(74px, 1fr) 28px;
+    gap: 0.25rem;
+    align-items: center;
+}
+
+.debt-paid-full-check {
+    display: flex;
+    justify-content: center;
+    margin: 0;
+}
+
+.debt-paid-full-check .form-check-input {
+    margin: 0;
+}
+
+.daily-summary-band,
+.seller-summary-band {
+    border: 1px solid #f1c232;
+    background: #fffaf0;
+    border-radius: 6px;
+    padding: 0.75rem;
+}
+
+.daily-summary-item {
+    background: #fff;
+    border: 1px solid #f5deb3;
+    border-radius: 6px;
+    padding: 0.65rem 0.75rem;
+}
+
+.seller-summary-table th,
+.seller-summary-table td,
+.image-review-table th,
+.image-review-table td {
+    white-space: nowrap;
+}
+
+.image-review-table td:last-child {
+    white-space: normal;
+    min-width: 180px;
 }

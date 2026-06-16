@@ -18,6 +18,7 @@ public class DashboardViewModel
 
     // Danh sách khách hàng (cho dropdown)
     public List<KhachHang> DanhSachKhach { get; set; } = new();
+    public List<string> DanhSachTenKhach { get; set; } = new();
 
     // Báo cáo
     public decimal TongNo { get; set; }
@@ -29,9 +30,10 @@ public class ThongKeKhach
 {
     public string TenKhach { get; set; } = "";
     public decimal NoCu { get; set; }
+    public decimal TraNoCu { get; set; }
     public decimal TongNoMoi { get; set; }
     public decimal TongDaTra { get; set; }
-    public decimal ConNo => NoCu + TongNoMoi - TongDaTra;
+    public decimal ConNo => NoCu - TraNoCu + TongNoMoi - TongDaTra;
 
     /// <summary>
     /// Nợ/Trả theo từng ngày: key = Date, value = (Nợ, Trả)

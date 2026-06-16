@@ -1,0 +1,58 @@
+# Note workflow - QuanLyNo
+
+## 1. Mục tiêu hệ thống
+- Quản lý công nợ theo ngày cho khách hàng.
+- Hỗ trợ nhập tay, import Excel, OCR từ ảnh, đối soát, và xuất báo cáo.
+
+## 2. Khởi động
+- `Program.cs` tạo SQLite database `quanlyno.db`.
+- `EnsureCreated()` rồi bổ sung các cột/bảng/index còn thiếu.
+- Gắn `AppDbContext`, MVC, static files, và route mặc định `Home/Index`.
+
+## 3. Dữ liệu chính
+- `KhachHang`: tên khách, nợ cũ, trả nợ cũ, ghi chú.
+- `GiaoDich`: giao dịch nợ mới theo ngày, có `TenLai`, `TenKhach`, `SoLuong`, `Gia`, `ThanhTien`, `TienTraLai`, và metadata nguồn ảnh.
+- `TraNo`: khoản trả nợ theo ngày, có `TenKhach`, `TenLai`, `SoTienTra`, và metadata nguồn ảnh.
+- `ImageImportBatch` / `ImageImportRow`: luồng OCR ảnh và review thủ công.
+
+## 4. Workflow màn hình chính
+1. Người dùng chọn ngày làm việc.
+2. Tab `Nhập nợ hôm nay`:
+   - Thêm giao dịch tay.
+   - Sửa / xóa giao dịch.
+   - Tự tính `ThanhTien` từ `SoLuong x Gia`.
+   - Tự tạo `KhachHang` nếu khách chưa tồn tại.
+3. Tab `Trả nợ hôm nay`:
+   - Hiển thị bảng công nợ theo khách và theo từng ngày.
+   - Cho phép sửa `TraNoCu` và khoản trả từng ngày.
+   - Lưu hàng loạt bằng API.
+4. Tab `Tổng nợ theo khách`:
+   - Tổng hợp `NoCu + NoMoi - TraNoCu - Tra`.
+   - Hiển thị chi tiết nợ / trả theo từng ngày.
+   - Có summary nợ phát sinh và thu hồi trong ngày.
+5. Tab `Hoàn thiện dữ liệu`:
+   - Upload ảnh ghi tay.
+   - OCR bằng Gemini.
+   - Tạo batch / row, match với `GiaoDich` hoặc `TraNo`.
+   - Review thủ công rồi áp dụng vào DB.
+   - Điền tên khách mua còn thiếu.
+
+## 5. Import / Export Excel
+- `ImportExcel` tự nhận diện:
+  - File hàng ngày -> import `GiaoDich`.
+  - File `BÁO CÁO` -> import `KhachHang` + `GiaoDich` + `TraNo`.
+- `ExportExcel`:
+  - Xuất giao dịch hôm nay.
+  - Hoặc xuất toàn bộ giao dịch.
+- `ExportBaoCao`:
+  - Xuất báo cáo công nợ theo khoảng ngày.
+
+## 6. Luồng ảnh
+- `ImportImageBatch` / `UploadImages` lưu file vào `wwwroot/uploads/image-imports`.
+- `GeminiImageParser` gọi Gemini API và trả JSON dòng dữ liệu.
+- `ImageImportService` tạo batch, match dữ liệu, và gán trạng thái `matched` / `mismatch` / `needs_review` / `applied`.
+- `ApplyImageImportReview` cập nhật `GiaoDich` / `TraNo` và tạo `KhachHang` nếu cần.
+- `GetUploadedImages` và `XoaImage` dùng để quản lý ảnh đã upload.
+
+## 7. Console utility
+- `ReadExcel` là app phụ để đọc workbook và in nội dung sheet ra console, phục vụ kiểm tra format mẫu.

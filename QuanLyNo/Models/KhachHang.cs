@@ -16,6 +16,10 @@ public class KhachHang
     [Column(TypeName = "decimal(18,0)")]
     public decimal NoCu { get; set; }
 
+    [Display(Name = "Trả nợ cũ")]
+    [Column(TypeName = "decimal(18,0)")]
+    public decimal TraNoCu { get; set; }
+
     [Display(Name = "Ghi chú")]
     [MaxLength(500)]
     public string? GhiChu { get; set; }
