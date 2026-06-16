@@ -992,21 +992,26 @@ public class HomeController : Controller
         if (string.IsNullOrWhiteSpace(apiKey))
             return Json(new { success = false, error = "Chưa cấu hình ANTHROPIC_API_KEY.", matches = Array.Empty<object>() });
 
-        var model = _configuration["Claude:Model"]
-            ?? Environment.GetEnvironmentVariable("CLAUDE_MODEL")
-            ?? "claude-opus-4-8";
+        var model = _configuration["Claude:Model"];
+        if (string.IsNullOrWhiteSpace(model))
+            model = Environment.GetEnvironmentVariable("ANTHROPIC_MODEL");
+        if (string.IsNullOrWhiteSpace(model))
+            model = Environment.GetEnvironmentVariable("CLAUDE_MODEL");
+        if (string.IsNullOrWhiteSpace(model))
+            model = "claude-sonnet-4-6";
 
         var excelList = string.Join("\n", request.ExcelNames.Select((n, i) => $"{i}: {n}"));
         var imageList = string.Join("\n", request.ImageNames.Select((n, i) => $"{i}: {n}"));
+        _ = """[{"imageIndex":0,"excelIndex":1,"confidence":0.9,"reason":"ly do ngan"}]""";
 
-        var prompt = $"""
+        var prompt = $$$"""
             Bạn là trợ lý kế toán Việt Nam. Hãy ghép các tên khách hàng từ 2 nguồn dữ liệu.
 
             Nguồn Excel (đánh máy):
-            {excelList}
+            {{{excelList}}}
 
             Nguồn ảnh OCR (đọc từ sổ tay):
-            {imageList}
+            {{{imageList}}}
 
             Tên có thể khác nhau vì: thiếu dấu tiếng Việt, viết tắt, OCR nhận sai ký tự, đảo thứ tự họ tên.
             Ghép mỗi tên ảnh với tên Excel phù hợp nhất nếu confidence >= 0.6.

@@ -16,6 +16,27 @@ public class GeminiImageParser
     public async Task<ImageParseResult> ParseAsync(string imagePath, string mimeType, string importType,
         CancellationToken cancellationToken = default)
     {
+        var provider = _configuration["AI:Provider"] ?? Environment.GetEnvironmentVariable("AI_PROVIDER");
+        if (string.Equals(provider, "Anthropic", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(provider, "Claude", StringComparison.OrdinalIgnoreCase) ||
+            (string.IsNullOrWhiteSpace(provider) && HasClaudeKey()))
+        {
+            return await ParseWithClaudeAsync(imagePath, mimeType, importType, cancellationToken);
+        }
+
+        return await ParseWithGeminiAsync(imagePath, mimeType, importType, cancellationToken);
+    }
+
+    private bool HasClaudeKey()
+    {
+        return !string.IsNullOrWhiteSpace(_configuration["Claude:ApiKey"])
+            || !string.IsNullOrWhiteSpace(_configuration["Anthropic:ApiKey"])
+            || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
+    }
+
+    private async Task<ImageParseResult> ParseWithGeminiAsync(string imagePath, string mimeType, string importType,
+        CancellationToken cancellationToken)
+    {
         var apiKey = _configuration["Gemini:ApiKey"];
         if (string.IsNullOrWhiteSpace(apiKey))
             apiKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY");
@@ -91,6 +112,92 @@ public class GeminiImageParser
         }
     }
 
+    private async Task<ImageParseResult> ParseWithClaudeAsync(string imagePath, string mimeType, string importType,
+        CancellationToken cancellationToken)
+    {
+        var apiKey = _configuration["Claude:ApiKey"];
+        if (string.IsNullOrWhiteSpace(apiKey))
+            apiKey = _configuration["Anthropic:ApiKey"];
+        if (string.IsNullOrWhiteSpace(apiKey))
+            apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            return ImageParseResult.NotConfigured(
+                "Claude is not configured. Set ANTHROPIC_API_KEY to enable Claude image parsing.");
+        }
+
+        var model = _configuration["Claude:Model"];
+        if (string.IsNullOrWhiteSpace(model))
+            model = _configuration["Anthropic:Model"];
+        if (string.IsNullOrWhiteSpace(model))
+            model = Environment.GetEnvironmentVariable("ANTHROPIC_MODEL");
+        if (string.IsNullOrWhiteSpace(model))
+            model = "claude-sonnet-4-6";
+
+        try
+        {
+            var bytes = await File.ReadAllBytesAsync(imagePath, cancellationToken);
+            var imageBase64 = Convert.ToBase64String(bytes);
+            var prompt = BuildPrompt(importType);
+
+            var payload = new
+            {
+                model,
+                max_tokens = 2048,
+                messages = new[]
+                {
+                    new
+                    {
+                        role = "user",
+                        content = new object[]
+                        {
+                            new
+                            {
+                                type = "image",
+                                source = new
+                                {
+                                    type = "base64",
+                                    media_type = NormalizeClaudeMimeType(mimeType),
+                                    data = imageBase64
+                                }
+                            },
+                            new { type = "text", text = prompt }
+                        }
+                    }
+                }
+            };
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.anthropic.com/v1/messages");
+            request.Headers.Add("x-api-key", apiKey);
+            request.Headers.Add("anthropic-version", "2023-06-01");
+            request.Content = JsonContent.Create(payload);
+
+            using var response = await HttpClient.SendAsync(request, cancellationToken);
+            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (!response.IsSuccessStatusCode)
+                return ImageParseResult.Failed($"Claude error {(int)response.StatusCode}: {responseBody}");
+
+            var jsonText = ExtractClaudeText(responseBody);
+            if (string.IsNullOrWhiteSpace(jsonText))
+                return ImageParseResult.Failed("Claude did not return JSON text.");
+
+            var parsed = JsonSerializer.Deserialize<ImageParseResult>(CleanJson(jsonText),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            if (parsed == null)
+                return ImageParseResult.Failed("Cannot parse Claude JSON response.");
+
+            parsed.RawText ??= jsonText;
+            parsed.Rows ??= new List<ImageParseRow>();
+            return parsed;
+        }
+        catch (Exception ex)
+        {
+            return ImageParseResult.Failed(ex.Message);
+        }
+    }
+
     private static string BuildPrompt(string importType)
     {
         var isTraNo = importType == "TraNoHomNay";
@@ -148,6 +255,37 @@ public class GeminiImageParser
         return null;
     }
 
+    private static string? ExtractClaudeText(string responseBody)
+    {
+        using var document = JsonDocument.Parse(responseBody);
+        var root = document.RootElement;
+        if (!root.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
+            return null;
+
+        foreach (var item in content.EnumerateArray())
+        {
+            if (item.TryGetProperty("type", out var type) &&
+                string.Equals(type.GetString(), "text", StringComparison.OrdinalIgnoreCase) &&
+                item.TryGetProperty("text", out var text))
+            {
+                return text.GetString();
+            }
+        }
+
+        return null;
+    }
+
+    private static string NormalizeClaudeMimeType(string mimeType)
+    {
+        var normalized = mimeType.ToLowerInvariant();
+        return normalized switch
+        {
+            "image/jpg" => "image/jpeg",
+            "image/jpeg" or "image/png" or "image/gif" or "image/webp" => normalized,
+            _ => "image/jpeg"
+        };
+    }
+
     private static string CleanJson(string text)
     {
         var trimmed = text.Trim();
@@ -170,10 +308,10 @@ public class ImageParseResult
     public string? Error { get; set; }
     public bool IsConfigured { get; set; } = true;
 
-    public static ImageParseResult NotConfigured() => new()
+    public static ImageParseResult NotConfigured(string? error = null) => new()
     {
         IsConfigured = false,
-        Error = "Gemini is not configured. Set Gemini:ApiKey or GEMINI_API_KEY to enable image parsing.",
+        Error = error ?? "Gemini is not configured. Set Gemini:ApiKey or GEMINI_API_KEY to enable image parsing.",
         Rows = new List<ImageParseRow>()
     };
 

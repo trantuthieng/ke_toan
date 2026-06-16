@@ -127,7 +127,6 @@ static string ToNpgsqlConnectionString(string connectionString)
         Username = userInfo.Length > 0 ? Uri.UnescapeDataString(userInfo[0]) : "",
         Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : "",
         SslMode = SslMode.Prefer,
-        TrustServerCertificate = true,
         NoResetOnClose = isPgBouncer,
         MaxAutoPrepare = isPgBouncer ? 0 : 20,
         CommandTimeout = 60
