@@ -104,13 +104,13 @@ public class ClaudeImageParser
         }
     }
 
-    private static Base64ImageSource.MediaTypeEnum GetMediaType(string mimeType) =>
+    private static MediaType GetMediaType(string mimeType) =>
         mimeType.ToLowerInvariant() switch
         {
-            "image/png" => Base64ImageSource.MediaTypeEnum.ImagePng,
-            "image/gif" => Base64ImageSource.MediaTypeEnum.ImageGif,
-            "image/webp" => Base64ImageSource.MediaTypeEnum.ImageWebp,
-            _ => Base64ImageSource.MediaTypeEnum.ImageJpeg
+            "image/png" => MediaType.ImagePng,
+            "image/gif" => MediaType.ImageGif,
+            "image/webp" => MediaType.ImageWebP,
+            _ => MediaType.ImageJpeg
         };
 
     private static string BuildPrompt(string importType)
