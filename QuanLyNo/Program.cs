@@ -108,6 +108,10 @@ static string ToNpgsqlConnectionString(string connectionString)
     }
     catch { }
 
+    // Supabase Transaction pooler (port 6543) requires prepared statements disabled
+    var isPgBouncer = uri.Port == 6543
+        || (uri.Query?.Contains("pgbouncer=true", StringComparison.OrdinalIgnoreCase) ?? false);
+
     var builder = new NpgsqlConnectionStringBuilder
     {
         Host = host,
@@ -116,7 +120,10 @@ static string ToNpgsqlConnectionString(string connectionString)
         Username = userInfo.Length > 0 ? Uri.UnescapeDataString(userInfo[0]) : "",
         Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : "",
         SslMode = SslMode.Prefer,
-        TrustServerCertificate = true
+        TrustServerCertificate = true,
+        NoResetOnClose = isPgBouncer,
+        MaxAutoPrepare = isPgBouncer ? 0 : 20,
+        CommandTimeout = 60
     };
 
     return builder.ConnectionString;
