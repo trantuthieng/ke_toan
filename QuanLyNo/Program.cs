@@ -3,6 +3,8 @@ using Microsoft.Extensions.FileProviders;
 using Npgsql;
 using QuanLyNo.Data;
 
+AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllersWithViews();
