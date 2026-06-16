@@ -1055,4 +1055,195 @@ document.addEventListener('DOMContentLoaded', function () {
 
         return { type: 'text', value: raw };
     }
+
+    // ===== SO SÁNH 2 NGUỒN DỮ LIỆU =====
+
+    var compareState = { data: null, userMatches: [] };
+
+    var btnLoadCompare = document.getElementById('btnLoadCompare');
+    if (btnLoadCompare) {
+        btnLoadCompare.addEventListener('click', loadCompareData);
+        document.getElementById('btnClaudeMatch').addEventListener('click', runClaudeMatch);
+    }
+
+    function loadCompareData() {
+        var ngay = (document.querySelector('input[name="ngay"]') || {}).value
+            || new Date().toISOString().slice(0, 10);
+        var loai = document.getElementById('compareLoai').value;
+        var nguon = document.getElementById('compareNguon').value;
+        var container = document.getElementById('compareResult');
+        if (!container) return;
+
+        container.innerHTML = '<p class="text-center text-muted"><span class="spinner-border spinner-border-sm me-1"></span>Đang tải...</p>';
+
+        var url = '/Home/GetCompareData?ngay=' + ngay + '&loaiImport=' + loai + (nguon ? '&nguonBanHang=' + nguon : '');
+        fetch(url)
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                compareState.data = data;
+                compareState.userMatches = (data.matches || []).slice();
+                renderCompareTable(container, data);
+                var btn = document.getElementById('btnClaudeMatch');
+                if (btn) btn.disabled = false;
+            })
+            .catch(function (err) {
+                container.innerHTML = '<p class="text-danger small">Lỗi tải dữ liệu: ' + err + '</p>';
+            });
+    }
+
+    function renderCompareTable(container, data) {
+        var loai = data.loai || 'NhapNoMoi';
+        var isTraNo = loai === 'TraNoHomNay';
+        var excel = data.excel || [];
+        var image = data.image || [];
+        var matches = compareState.userMatches || [];
+
+        var matchedExcelIds = new Set(matches.map(function (m) { return m.excelId; }));
+        var matchedImageIds = new Set(matches.map(function (m) { return m.imageId; }));
+        var unmatchedExcel = excel.filter(function (e) { return !matchedExcelIds.has(e.id); });
+        var unmatchedImage = image.filter(function (i) { return !matchedImageIds.has(i.id); });
+
+        var amtLabel = isTraNo ? 'Tiền (đ)' : 'SL (kg)';
+
+        var html = '<table class="table table-sm table-bordered small mb-0">';
+        html += '<thead class="table-dark"><tr>';
+        html += '<th>Tên Excel</th><th>Tên Ảnh OCR</th>';
+        html += '<th style="width:70px">Khớp tên</th>';
+        html += '<th>' + amtLabel + ' Excel</th>';
+        html += '<th>' + amtLabel + ' Ảnh</th>';
+        html += '<th style="width:80px">Chênh</th>';
+        html += '</tr></thead><tbody>';
+
+        matches.forEach(function (m) {
+            var exRow = excel.find(function (e) { return e.id === m.excelId; });
+            var imRow = image.find(function (i) { return i.id === m.imageId; });
+            if (!exRow || !imRow) return;
+
+            var sim = Math.round((m.nameSimilarity || 0) * 100);
+            var simCls = sim >= 90 ? 'bg-success' : sim >= 65 ? 'bg-warning text-dark' : 'bg-danger';
+            var rowCls = m.hasDiscrepancy ? 'table-danger' : (m.matchMethod === 'suggest' ? 'table-warning' : '');
+            var amtEx = isTraNo ? exRow.soTienTra : exRow.soLuong;
+            var amtIm = isTraNo ? imRow.soTienTra : imRow.soLuongAnh;
+            var diff = m.amountDiff;
+
+            html += '<tr class="' + rowCls + '">';
+            html += '<td>' + escapeHtml(exRow.tenKhach || '') + '</td>';
+            html += '<td>' + escapeHtml(imRow.tenKhach || '')
+                + (m.matchMethod === 'claude' ? ' <span class="badge bg-info">AI</span>' : '') + '</td>';
+            html += '<td><span class="badge ' + simCls + '">' + sim + '%</span></td>';
+            html += '<td class="text-end">' + (amtEx != null ? formatDisplayNumber(amtEx) : '<span class="text-muted">-</span>') + '</td>';
+            html += '<td class="text-end">' + (amtIm != null ? formatDisplayNumber(amtIm) : '<span class="text-muted">-</span>') + '</td>';
+            html += '<td class="text-end">' + (diff != null && diff > 0
+                ? '<span class="text-danger fw-bold">' + formatDisplayNumber(diff) + '</span>'
+                : '<span class="text-success">OK</span>') + '</td>';
+            html += '</tr>';
+        });
+
+        unmatchedExcel.forEach(function (e) {
+            var amt = isTraNo ? e.soTienTra : e.soLuong;
+            html += '<tr class="table-secondary">';
+            html += '<td>' + escapeHtml(e.tenKhach || '') + '</td>';
+            html += '<td><em class="text-muted">— không có ảnh tương ứng —</em></td>';
+            html += '<td>-</td>';
+            html += '<td class="text-end">' + (amt != null ? formatDisplayNumber(amt) : '-') + '</td>';
+            html += '<td>-</td><td>-</td></tr>';
+        });
+
+        unmatchedImage.forEach(function (img) {
+            var amt = isTraNo ? img.soTienTra : img.soLuongAnh;
+            html += '<tr class="table-secondary">';
+            html += '<td><em class="text-muted">— không có Excel tương ứng —</em></td>';
+            html += '<td>' + escapeHtml(img.tenKhach || '') + '</td>';
+            html += '<td>-</td><td>-</td>';
+            html += '<td class="text-end">' + (amt != null ? formatDisplayNumber(amt) : '-') + '</td>';
+            html += '<td>-</td></tr>';
+        });
+
+        html += '</tbody></table>';
+
+        var discCnt = matches.filter(function (m) { return m.hasDiscrepancy; }).length;
+        var suggestCnt = matches.filter(function (m) { return m.matchMethod === 'suggest'; }).length;
+        var summary = '<div class="d-flex flex-wrap gap-2 mb-2 small">';
+        summary += '<span class="badge bg-success">Khớp chắc: ' + matches.filter(function (m) { return m.matchMethod === 'auto'; }).length + '</span>';
+        if (suggestCnt) summary += '<span class="badge bg-warning text-dark">Cần xác nhận: ' + suggestCnt + '</span>';
+        if (discCnt) summary += '<span class="badge bg-danger">Lệch số liệu: ' + discCnt + '</span>';
+        if (unmatchedExcel.length) summary += '<span class="badge bg-secondary">Excel chưa khớp: ' + unmatchedExcel.length + '</span>';
+        if (unmatchedImage.length) summary += '<span class="badge bg-secondary">Ảnh chưa khớp: ' + unmatchedImage.length + '</span>';
+        summary += '</div>';
+
+        container.innerHTML = summary + html;
+    }
+
+    function runClaudeMatch() {
+        var data = compareState.data;
+        if (!data) return;
+
+        var confirmed = (compareState.userMatches || []).filter(function (m) { return (m.nameSimilarity || 0) >= 0.9; });
+        var confirmedExcelIds = new Set(confirmed.map(function (m) { return m.excelId; }));
+        var confirmedImageIds = new Set(confirmed.map(function (m) { return m.imageId; }));
+
+        var pendingExcel = (data.excel || []).filter(function (e) { return !confirmedExcelIds.has(e.id); });
+        var pendingImage = (data.image || []).filter(function (i) { return !confirmedImageIds.has(i.id); });
+
+        if (pendingExcel.length === 0 && pendingImage.length === 0) {
+            alert('Tất cả tên đã được khớp với độ tin cậy cao (>= 90%).');
+            return;
+        }
+
+        var btn = document.getElementById('btnClaudeMatch');
+        var originalHtml = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Claude đang xử lý...';
+
+        fetch('/Home/MatchNamesWithClaude', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                excelNames: pendingExcel.map(function (e) { return e.tenKhach || ''; }),
+                imageNames: pendingImage.map(function (i) { return i.tenKhach || ''; })
+            })
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (result) {
+            btn.disabled = false;
+            btn.innerHTML = originalHtml;
+
+            if (!result.success) {
+                alert('Lỗi Claude: ' + (result.error || 'Không xác định'));
+                return;
+            }
+
+            var loai = data.loai || 'NhapNoMoi';
+            var isTraNo = loai === 'TraNoHomNay';
+            var newMatches = confirmed.slice();
+
+            (result.matches || []).forEach(function (cm) {
+                var exRow = pendingExcel[cm.excelIndex];
+                var imRow = pendingImage[cm.imageIndex];
+                if (!exRow || !imRow) return;
+
+                var amtEx = isTraNo ? exRow.soTienTra : exRow.soLuong;
+                var amtIm = isTraNo ? imRow.soTienTra : imRow.soLuongAnh;
+                var diff = (amtEx != null && amtIm != null) ? Math.abs(amtEx - amtIm) : null;
+
+                newMatches.push({
+                    excelId: exRow.id, imageId: imRow.id,
+                    excelName: exRow.tenKhach, imageName: imRow.tenKhach,
+                    nameSimilarity: cm.confidence || 0.7,
+                    matchMethod: 'claude',
+                    amountExcel: amtEx, amountImage: amtIm, amountDiff: diff,
+                    hasDiscrepancy: diff != null && diff > (isTraNo ? 1000 : 0.5)
+                });
+            });
+
+            compareState.userMatches = newMatches;
+            var container = document.getElementById('compareResult');
+            if (container) renderCompareTable(container, data);
+        })
+        .catch(function (err) {
+            btn.disabled = false;
+            btn.innerHTML = originalHtml;
+            alert('Lỗi kết nối: ' + err);
+        });
+    }
 });

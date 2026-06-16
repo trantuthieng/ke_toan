@@ -1,9 +1,12 @@
+using Anthropic;
+using Anthropic.Models.Messages;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using QuanLyNo.Data;
 using QuanLyNo.Models;
 using QuanLyNo.Services;
 using QuanLyNo.ViewModels;
+using System.Text;
 using System.Text.Json;
 
 namespace QuanLyNo.Controllers;
@@ -930,6 +933,209 @@ public class HomeController : Controller
         await _db.SaveChangesAsync();
         return Json(new { success = true, updated = changed });
     }
+
+    // ===== SO SÁNH 2 NGUỒN DỮ LIỆU =====
+
+    [HttpGet]
+    public async Task<IActionResult> GetCompareData(string? ngay, string? loaiImport, string? nguonBanHang)
+    {
+        var date = ParseDateOrToday(ngay);
+        var loai = string.IsNullOrEmpty(loaiImport) ? ImageImportTypes.NhapNoMoi : loaiImport;
+
+        var batches = await _imageImports.GetBatchesAsync(date, loai, nguonBanHang);
+        var imageRows = batches
+            .OrderBy(b => b.CreatedAt).ThenBy(b => b.Id)
+            .SelectMany(b => b.Rows.OrderBy(r => r.ImageOrder).ThenBy(r => r.Id))
+            .Select(r => new CompareImageRow
+            {
+                Id = r.Id, TenKhach = r.TenKhach, TenLai = r.TenLai,
+                SoLuongAnh = r.SoLuongAnh, SoTienTra = r.SoTienTra, Confidence = r.Confidence
+            }).ToList();
+
+        List<CompareExcelRow> excelRows;
+        if (loai == ImageImportTypes.TraNoHomNay)
+        {
+            var tranos = await _db.TraNos
+                .Where(t => t.NgayTra.Date == date.Date &&
+                            (string.IsNullOrEmpty(nguonBanHang) || t.NguonBanHang == nguonBanHang))
+                .OrderBy(t => t.TenKhach).ToListAsync();
+            excelRows = tranos.Select(t => new CompareExcelRow
+            {
+                Id = t.Id, TenKhach = t.TenKhach, TenLai = t.TenLai, SoLuong = null, SoTienTra = t.SoTienTra
+            }).ToList();
+        }
+        else
+        {
+            var giaodichs = await _db.GiaoDichs
+                .Where(g => g.Ngay.Date == date.Date &&
+                            (string.IsNullOrEmpty(nguonBanHang) || g.NguonBanHang == nguonBanHang))
+                .OrderBy(g => g.TenLai).ThenBy(g => g.TenKhach).ToListAsync();
+            excelRows = giaodichs.Select(g => new CompareExcelRow
+            {
+                Id = g.Id, TenKhach = g.TenKhach, TenLai = g.TenLai, SoLuong = g.SoLuong, SoTienTra = null
+            }).ToList();
+        }
+
+        var matches = ComputeAutoMatches(excelRows, imageRows, loai);
+        return Json(new { loai, excel = excelRows, image = imageRows, matches });
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> MatchNamesWithClaude([FromBody] ClaudeMatchRequest request)
+    {
+        if (request?.ExcelNames == null || request.ImageNames == null)
+            return BadRequest("Thiếu dữ liệu.");
+
+        var apiKey = _configuration["Claude:ApiKey"];
+        if (string.IsNullOrWhiteSpace(apiKey))
+            apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+        if (string.IsNullOrWhiteSpace(apiKey))
+            return Json(new { success = false, error = "Chưa cấu hình ANTHROPIC_API_KEY.", matches = Array.Empty<object>() });
+
+        var model = _configuration["Claude:Model"]
+            ?? Environment.GetEnvironmentVariable("CLAUDE_MODEL")
+            ?? "claude-opus-4-8";
+
+        var excelList = string.Join("\n", request.ExcelNames.Select((n, i) => $"{i}: {n}"));
+        var imageList = string.Join("\n", request.ImageNames.Select((n, i) => $"{i}: {n}"));
+
+        var prompt = $"""
+            Bạn là trợ lý kế toán Việt Nam. Hãy ghép các tên khách hàng từ 2 nguồn dữ liệu.
+
+            Nguồn Excel (đánh máy):
+            {excelList}
+
+            Nguồn ảnh OCR (đọc từ sổ tay):
+            {imageList}
+
+            Tên có thể khác nhau vì: thiếu dấu tiếng Việt, viết tắt, OCR nhận sai ký tự, đảo thứ tự họ tên.
+            Ghép mỗi tên ảnh với tên Excel phù hợp nhất nếu confidence >= 0.6.
+
+            Chỉ trả về JSON hợp lệ, không markdown:
+            [{{"imageIndex":0,"excelIndex":1,"confidence":0.9,"reason":"lý do ngắn"}}]
+            Nếu không có cặp nào phù hợp, trả về [].
+            """;
+
+        try
+        {
+            var client = new AnthropicClient { ApiKey = apiKey };
+            var parameters = new MessageCreateParams
+            {
+                Model = model,
+                MaxTokens = 1024,
+                Messages =
+                [
+                    new()
+                    {
+                        Role = Role.User,
+                        Content = new List<ContentBlockParam> { new TextBlockParam { Text = prompt } }
+                    }
+                ]
+            };
+
+            var sb = new StringBuilder();
+            await foreach (var ev in client.Messages.CreateStreaming(parameters))
+                if (ev.TryPickContentBlockDelta(out var delta) && delta.Delta.TryPickText(out var t))
+                    sb.Append(t.Text);
+
+            var text = sb.ToString().Trim();
+            if (text.StartsWith("```"))
+            {
+                var nl = text.IndexOf('\n'); var last = text.LastIndexOf("```");
+                if (nl >= 0 && last > nl) text = text[(nl + 1)..last].Trim();
+            }
+
+            var claudeMatches = JsonSerializer.Deserialize<List<ClaudeMatchResult>>(text,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
+
+            return Json(new { success = true, matches = claudeMatches });
+        }
+        catch (Exception ex)
+        {
+            return Json(new { success = false, error = ex.Message, matches = Array.Empty<object>() });
+        }
+    }
+
+    private static List<CompareMatch> ComputeAutoMatches(
+        List<CompareExcelRow> excelRows, List<CompareImageRow> imageRows, string loai)
+    {
+        var matches = new List<CompareMatch>();
+        var usedExcel = new HashSet<int>();
+        var usedImage = new HashSet<int>();
+
+        var candidates = new List<(int e, int i, double score)>();
+        for (int e = 0; e < excelRows.Count; e++)
+            for (int i = 0; i < imageRows.Count; i++)
+            {
+                var score = NameSimilarity(excelRows[e].TenKhach, imageRows[i].TenKhach);
+                if (score >= 0.5) candidates.Add((e, i, score));
+            }
+
+        foreach (var (eIdx, iIdx, score) in candidates.OrderByDescending(c => c.score))
+        {
+            if (usedExcel.Contains(eIdx) || usedImage.Contains(iIdx)) continue;
+            usedExcel.Add(eIdx); usedImage.Add(iIdx);
+
+            var excel = excelRows[eIdx];
+            var image = imageRows[iIdx];
+            var isTraNo = loai == ImageImportTypes.TraNoHomNay;
+            var amtExcel = isTraNo ? excel.SoTienTra : excel.SoLuong;
+            var amtImage = isTraNo ? image.SoTienTra : image.SoLuongAnh;
+            var diff = amtExcel.HasValue && amtImage.HasValue ? Math.Abs(amtExcel.Value - amtImage.Value) : (decimal?)null;
+
+            matches.Add(new CompareMatch
+            {
+                ExcelId = excel.Id, ImageId = image.Id,
+                ExcelName = excel.TenKhach, ImageName = image.TenKhach,
+                NameSimilarity = score,
+                MatchMethod = score >= 0.9 ? "auto" : "suggest",
+                AmountExcel = amtExcel, AmountImage = amtImage, AmountDiff = diff,
+                HasDiscrepancy = diff.HasValue && diff.Value > (isTraNo ? 1000m : 0.5m)
+            });
+        }
+        return matches;
+    }
+
+    private static double NameSimilarity(string? a, string? b)
+    {
+        if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b)) return 0;
+        var na = NormalizeNameForCompare(a);
+        var nb = NormalizeNameForCompare(b);
+        if (na == nb) return 1.0;
+        if (na.Contains(nb) || nb.Contains(na)) return 0.85;
+        var dist = LevenshteinDistance(na, nb);
+        return Math.Max(na.Length, nb.Length) == 0 ? 1.0
+            : 1.0 - (double)dist / Math.Max(na.Length, nb.Length);
+    }
+
+    private static string NormalizeNameForCompare(string name)
+    {
+        var normalized = name.Trim().ToLowerInvariant()
+            .Normalize(System.Text.NormalizationForm.FormD);
+        var sb = new StringBuilder();
+        var prevSpace = false;
+        foreach (var c in normalized)
+        {
+            var cat = System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c);
+            if (cat == System.Globalization.UnicodeCategory.NonSpacingMark) continue;
+            if (char.IsWhiteSpace(c)) { if (!prevSpace) { sb.Append(' '); prevSpace = true; } }
+            else { sb.Append(c); prevSpace = false; }
+        }
+        return sb.ToString().Trim();
+    }
+
+    private static int LevenshteinDistance(string a, string b)
+    {
+        var dp = new int[a.Length + 1, b.Length + 1];
+        for (int i = 0; i <= a.Length; i++) dp[i, 0] = i;
+        for (int j = 0; j <= b.Length; j++) dp[0, j] = j;
+        for (int i = 1; i <= a.Length; i++)
+            for (int j = 1; j <= b.Length; j++)
+                dp[i, j] = a[i - 1] == b[j - 1]
+                    ? dp[i - 1, j - 1]
+                    : 1 + Math.Min(dp[i - 1, j], Math.Min(dp[i, j - 1], dp[i - 1, j - 1]));
+        return dp[a.Length, b.Length];
+    }
 }
 
 public class CapNhatKhachRequest
@@ -949,4 +1155,51 @@ public class CapNhatTraNoCuRequest
 {
     public string TenKhach { get; set; } = "";
     public decimal TraNoCu { get; set; }
+}
+
+public class CompareExcelRow
+{
+    public int Id { get; set; }
+    public string? TenKhach { get; set; }
+    public string? TenLai { get; set; }
+    public decimal? SoLuong { get; set; }
+    public decimal? SoTienTra { get; set; }
+}
+
+public class CompareImageRow
+{
+    public int Id { get; set; }
+    public string? TenKhach { get; set; }
+    public string? TenLai { get; set; }
+    public decimal? SoLuongAnh { get; set; }
+    public decimal? SoTienTra { get; set; }
+    public decimal? Confidence { get; set; }
+}
+
+public class CompareMatch
+{
+    public int ExcelId { get; set; }
+    public int ImageId { get; set; }
+    public string? ExcelName { get; set; }
+    public string? ImageName { get; set; }
+    public double NameSimilarity { get; set; }
+    public string MatchMethod { get; set; } = "auto";
+    public decimal? AmountExcel { get; set; }
+    public decimal? AmountImage { get; set; }
+    public decimal? AmountDiff { get; set; }
+    public bool HasDiscrepancy { get; set; }
+}
+
+public class ClaudeMatchRequest
+{
+    public List<string> ExcelNames { get; set; } = new();
+    public List<string> ImageNames { get; set; } = new();
+}
+
+public class ClaudeMatchResult
+{
+    public int ImageIndex { get; set; }
+    public int ExcelIndex { get; set; }
+    public double Confidence { get; set; }
+    public string? Reason { get; set; }
 }

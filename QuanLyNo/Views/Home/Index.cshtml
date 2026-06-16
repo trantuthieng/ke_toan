@@ -586,6 +586,49 @@
                 </div>
             </div>
         </div>
+
+        <!-- SO SÁNH 2 NGUỒN DỮ LIỆU -->
+        <div class="card mt-3">
+            <div class="card-header d-flex justify-content-between align-items-center" style="background:#6f42c1;color:#fff;">
+                <span><i class="bi bi-arrow-left-right"></i> So sánh 2 nguồn dữ liệu (Excel vs Ảnh OCR)</span>
+                <button class="btn btn-sm btn-outline-light" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#comparePanel">
+                    <i class="bi bi-chevron-down"></i>
+                </button>
+            </div>
+            <div class="collapse" id="comparePanel">
+                <div class="card-body">
+                    <div class="row g-2 align-items-end mb-3">
+                        <div class="col-md-3">
+                            <label class="form-label small">Loại</label>
+                            <select id="compareLoai" class="form-select form-select-sm">
+                                <option value="NhapNoMoi">Nhập nợ mới</option>
+                                <option value="TraNoHomNay">Trả nợ hôm nay</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label small">Nguồn</label>
+                            <select id="compareNguon" class="form-select form-select-sm">
+                                <option value="">Tất cả</option>
+                                <option value="BH1">Bán hàng 1</option>
+                                <option value="BH2">Bán hàng 2</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 d-flex gap-2">
+                            <button class="btn btn-sm btn-outline-secondary" id="btnLoadCompare" type="button">
+                                <i class="bi bi-arrow-clockwise"></i> Tải dữ liệu
+                            </button>
+                            <button class="btn btn-sm btn-outline-primary" id="btnClaudeMatch" type="button" disabled>
+                                <i class="bi bi-cpu"></i> Claude khớp tên chưa chắc
+                            </button>
+                        </div>
+                    </div>
+                    <div id="compareResult">
+                        <p class="text-muted text-center small">Nhấn "Tải dữ liệu" để so sánh Excel và ảnh OCR theo ngày đang xem.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
