@@ -24,9 +24,9 @@ try
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.EnsureCreated();
     if (db.Database.IsSqlite())
     {
+        db.Database.EnsureCreated();
         EnsureColumn(db, "KhachHangs", "TraNoCu", "TEXT NOT NULL DEFAULT '0'");
         EnsureColumn(db, "GiaoDichs", "SoLuongAnh", "TEXT NULL");
         EnsureColumn(db, "GiaoDichs", "NguonBanHang", "TEXT NULL");
@@ -40,6 +40,7 @@ try
         EnsureColumn(db, "TraNos", "ReviewStatus", "TEXT NULL");
         EnsureImageImportSchema(db);
     }
+    // PostgreSQL: tables are created via SQL script run once in the database console
 }
 catch (Exception ex)
 {
