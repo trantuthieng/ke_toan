@@ -1,6 +1,7 @@
 using ClosedXML.Excel;
+using ExcelDataReader;
+using System.Data;
 using System.Globalization;
-using System.Text.RegularExpressions;
 using QuanLyNo.Models;
 using QuanLyNo.ViewModels;
 
@@ -8,43 +9,114 @@ namespace QuanLyNo.Services;
 
 public class ExcelService
 {
-    /// <summary>
-    /// Import giao dịch hàng ngày từ file Excel (format: KH | SC | SL | GIÁ | T.TIỀN | TiềnLái)
-    /// Nhóm theo KH (lái/khách bán), tự động bỏ dòng subtotal
-    /// KH trong Excel = TenLai (khách hàng bán). TenKhach (khách mua) sẽ được bổ sung từ ảnh.
-    /// </summary>
-    public List<GiaoDich> ImportGiaoDichHangNgay(Stream stream, DateTime ngay)
+    // ── HELPERS ──────────────────────────────────────────────────
+
+    private static DataTable LoadFirstSheet(Stream stream)
     {
-        using var workbook = new XLWorkbook(stream);
-        var ws = workbook.Worksheets.First();
-        return ImportGiaoDichHangNgayFromSheet(ws, ngay);
+        System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+        using var reader = ExcelReaderFactory.CreateReader(stream);
+        var ds = reader.AsDataSet(new ExcelDataSetConfiguration
+        {
+            ConfigureDataTable = _ => new ExcelDataTableConfiguration { UseHeaderRow = false }
+        });
+        return ds.Tables.Count > 0 ? ds.Tables[0] : new DataTable();
     }
 
-    private List<GiaoDich> ImportGiaoDichHangNgayFromSheet(IXLWorksheet ws, DateTime ngay)
+    // col is 1-based (Excel convention)
+    private static string GetStr(DataRow row, int col)
     {
+        int i = col - 1;
+        return i < row.Table.Columns.Count ? row[i]?.ToString()?.Trim() ?? "" : "";
+    }
+
+    private static decimal GetDec(DataRow row, int col)
+    {
+        int i = col - 1;
+        if (i >= row.Table.Columns.Count) return 0;
+        var v = row[i];
+        if (v == null || v == DBNull.Value) return 0;
+        if (v is double d) return (decimal)d;
+        if (v is decimal dec) return dec;
+        return decimal.TryParse(v.ToString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var r) ? r : 0;
+    }
+
+    // ── DETECT ───────────────────────────────────────────────────
+
+    private static string DetectFileType(DataTable dt)
+    {
+        var r1 = dt.Rows.Count > 0 ? dt.Rows[0][0]?.ToString() ?? "" : "";
+        if (r1.Contains("BÁO CÁO", StringComparison.OrdinalIgnoreCase) ||
+            r1.Contains("CÔNG NỢ", StringComparison.OrdinalIgnoreCase))
+            return "baocao";
+
+        if (dt.Rows.Count > 2)
+        {
+            var row3 = dt.Rows[2];
+            int nonEmpty = row3.ItemArray.Count(v => v != null && v != DBNull.Value && !string.IsNullOrWhiteSpace(v.ToString()));
+            if (nonEmpty >= 10) return "baocao";
+        }
+
+        return "hangngay";
+    }
+
+    // ── PUBLIC IMPORT ────────────────────────────────────────────
+
+    public (string fileType,
+            List<GiaoDich> giaoDichs,
+            List<KhachHang> khachHangs,
+            List<TraNo> traNos) DetectAndImport(Stream stream, DateTime ngay)
+    {
+        var dt = LoadFirstSheet(stream);
+        var fileType = DetectFileType(dt);
+
+        if (fileType == "baocao")
+        {
+            var (khs, gds, tns) = ImportBaoCaoFromTable(dt);
+            return (fileType, gds, khs, tns);
+        }
+        else
+        {
+            var gds = ImportGiaoDichFromTable(dt, ngay);
+            return (fileType, gds, new List<KhachHang>(), new List<TraNo>());
+        }
+    }
+
+    public List<GiaoDich> ImportGiaoDichHangNgay(Stream stream, DateTime ngay)
+    {
+        var dt = LoadFirstSheet(stream);
+        return ImportGiaoDichFromTable(dt, ngay);
+    }
+
+    public (List<KhachHang> khachHangs, List<GiaoDich> giaoDichs, List<TraNo> traNos) ImportBaoCao(Stream stream)
+    {
+        var dt = LoadFirstSheet(stream);
+        return ImportBaoCaoFromTable(dt);
+    }
+
+    // ── PRIVATE IMPORT ───────────────────────────────────────────
+
+    private List<GiaoDich> ImportGiaoDichFromTable(DataTable dt, DateTime ngay)
+    {
+        if (IsKhachHangLaiFormat(dt))
+            return ImportKhachHangLaiFormat(dt, ngay);
+
         var allItems = new List<GiaoDich>();
-
-        if (IsKhachHangLaiFormat(ws))
-            return ImportKhachHangLaiFormat(ws, ngay);
-
         string currentLai = "";
         var group = new List<GiaoDich>();
-        int lastRow = ws.LastRowUsed()?.RowNumber() ?? 0;
 
-        for (int r = 3; r <= lastRow; r++)
+        for (int r = 2; r < dt.Rows.Count; r++) // data from row 3 (index 2)
         {
-            var row = ws.Row(r);
+            var row = dt.Rows[r];
 
-            // Skip fully empty rows → flush current group
-            if (row.Cell(2).IsEmpty() && row.Cell(3).IsEmpty() && row.Cell(5).IsEmpty())
+            if (GetDec(row, 2) == 0 && GetDec(row, 3) == 0 && GetDec(row, 5) == 0
+                && string.IsNullOrWhiteSpace(GetStr(row, 1)))
             {
                 FlushGroup(currentLai, group, allItems);
                 group.Clear();
                 continue;
             }
 
-            // Check for new lái name in col 1
-            string kh = row.Cell(1).IsEmpty() ? "" : row.Cell(1).GetString().Trim();
+            string kh = GetStr(row, 1);
             if (!string.IsNullOrEmpty(kh) && kh != currentLai)
             {
                 FlushGroup(currentLai, group, allItems);
@@ -54,24 +126,19 @@ public class ExcelService
 
             if (string.IsNullOrEmpty(currentLai)) continue;
 
-            decimal sc = GetDecimal(row.Cell(2));
-            decimal sl = GetDecimal(row.Cell(3));
-            decimal gia = GetDecimal(row.Cell(4));
-            decimal ttien = GetDecimal(row.Cell(5));
-            decimal tienLai = GetDecimal(row.Cell(6));
-
+            decimal sl = GetDec(row, 3);
             if (sl > 0)
             {
                 group.Add(new GiaoDich
                 {
                     Ngay = ngay,
                     TenLai = currentLai,
-                    TenKhach = "",  // sẽ bổ sung từ ảnh
-                    SoCon = sc,
+                    TenKhach = "",
+                    SoCon = GetDec(row, 2),
                     SoLuong = sl,
-                    Gia = gia,
-                    ThanhTien = ttien,
-                    TienTraLai = tienLai
+                    Gia = GetDec(row, 4),
+                    ThanhTien = GetDec(row, 5),
+                    TienTraLai = GetDec(row, 6)
                 });
             }
         }
@@ -80,23 +147,49 @@ public class ExcelService
         return allItems;
     }
 
-    private List<GiaoDich> ImportKhachHangLaiFormat(IXLWorksheet ws, DateTime ngay)
+    private bool IsKhachHangLaiFormat(DataTable dt)
+    {
+        int limit = Math.Min(dt.Rows.Count, 82); // rows 3–80 → indices 2–81
+        int dataRows = 0, namedDataRows = 0;
+
+        for (int r = 2; r < limit; r++)
+        {
+            var row = dt.Rows[r];
+            if (GetDec(row, 5) == 0) continue;
+            dataRows++;
+            if (!string.IsNullOrWhiteSpace(GetStr(row, 1))) namedDataRows++;
+        }
+
+        return dataRows >= 5 && namedDataRows >= dataRows * 0.8m;
+    }
+
+    private bool FirstDataRowIsSeller(DataTable dt)
+    {
+        for (int r = 2; r < dt.Rows.Count; r++)
+        {
+            var row = dt.Rows[r];
+            if (string.IsNullOrWhiteSpace(GetStr(row, 1))) continue;
+            return GetDec(row, 5) == 0 && GetDec(row, 3) == 0 && GetDec(row, 4) == 0;
+        }
+        return false;
+    }
+
+    private List<GiaoDich> ImportKhachHangLaiFormat(DataTable dt, DateTime ngay)
     {
         var result = new List<GiaoDich>();
         var pending = new List<GiaoDich>();
         var currentLai = "";
-        var sellerFirst = FirstDataRowIsSeller(ws);
-        int lastRow = ws.LastRowUsed()?.RowNumber() ?? 0;
+        var sellerFirst = FirstDataRowIsSeller(dt);
 
-        for (int r = 3; r <= lastRow; r++)
+        for (int r = 2; r < dt.Rows.Count; r++)
         {
-            var row = ws.Row(r);
-            var ten = row.Cell(1).IsEmpty() ? "" : row.Cell(1).GetString().Trim();
+            var row = dt.Rows[r];
+            var ten = GetStr(row, 1);
             if (string.IsNullOrWhiteSpace(ten)) continue;
 
-            var thanhTien = GetDecimal(row.Cell(5));
-            var soLuong = GetDecimal(row.Cell(3));
-            var gia = GetDecimal(row.Cell(4));
+            decimal thanhTien = GetDec(row, 5);
+            decimal soLuong = GetDec(row, 3);
+            decimal gia = GetDec(row, 4);
 
             if (thanhTien == 0 && soLuong == 0 && gia == 0)
             {
@@ -106,8 +199,7 @@ public class ExcelService
                 }
                 else
                 {
-                    foreach (var gd in pending)
-                        gd.TenLai = ten;
+                    foreach (var gd in pending) gd.TenLai = ten;
                     result.AddRange(pending);
                     pending.Clear();
                 }
@@ -116,145 +208,78 @@ public class ExcelService
 
             if (thanhTien == 0 || soLuong == 0) continue;
 
-            var items = CreateSplitGiaoDichs(row, ngay, ten, sellerFirst ? currentLai : "");
+            var item = new GiaoDich
+            {
+                Ngay = ngay,
+                TenLai = sellerFirst ? currentLai : "",
+                TenKhach = ten,
+                SoCon = GetDec(row, 2),
+                SoLuong = soLuong,
+                Gia = gia,
+                ThanhTien = thanhTien,
+                TienTraLai = GetDec(row, 6)
+            };
+
             if (sellerFirst)
-                result.AddRange(items);
+                result.Add(item);
             else
-                pending.AddRange(items);
+                pending.Add(item);
         }
 
         if (pending.Count > 0)
         {
-            foreach (var gd in pending)
-                gd.TenLai = currentLai;
+            foreach (var gd in pending) gd.TenLai = currentLai;
             result.AddRange(pending);
         }
 
         return result;
     }
 
-    private bool IsKhachHangLaiFormat(IXLWorksheet ws)
+    private (List<KhachHang> khachHangs, List<GiaoDich> giaoDichs, List<TraNo> traNos) ImportBaoCaoFromTable(DataTable dt)
     {
-        int lastRow = Math.Min(ws.LastRowUsed()?.RowNumber() ?? 0, 80);
-        int dataRows = 0;
-        int namedDataRows = 0;
+        var khachHangs = new List<KhachHang>();
+        var giaoDichs = new List<GiaoDich>();
+        var traNos = new List<TraNo>();
 
-        for (int r = 3; r <= lastRow; r++)
+        var dates = new List<DateTime>();
+        if (dt.Rows.Count > 2)
         {
-            var row = ws.Row(r);
-            var hasAmount = GetDecimal(row.Cell(5)) != 0;
-            var hasName = !string.IsNullOrWhiteSpace(row.Cell(1).GetString());
-
-            if (!hasAmount) continue;
-            dataRows++;
-            if (hasName) namedDataRows++;
-        }
-
-        return dataRows >= 5 && namedDataRows >= dataRows * 0.8m;
-    }
-
-    private bool FirstDataRowIsSeller(IXLWorksheet ws)
-    {
-        int lastRow = ws.LastRowUsed()?.RowNumber() ?? 0;
-        for (int r = 3; r <= lastRow; r++)
-        {
-            var row = ws.Row(r);
-            var hasName = !string.IsNullOrWhiteSpace(row.Cell(1).GetString());
-            if (!hasName) continue;
-
-            return GetDecimal(row.Cell(5)) == 0 &&
-                GetDecimal(row.Cell(3)) == 0 &&
-                GetDecimal(row.Cell(4)) == 0;
-        }
-
-        return false;
-    }
-
-    private List<GiaoDich> CreateSplitGiaoDichs(IXLRow row, DateTime ngay, string tenKhach, string tenLai)
-    {
-        var parts = GetSoLuongParts(row.Cell(3));
-        var soLuong = GetDecimal(row.Cell(3));
-        if (parts.Count == 0)
-            parts.Add(soLuong);
-
-        var soCon = GetDecimal(row.Cell(2));
-        var gia = GetDecimal(row.Cell(4));
-        var thanhTien = GetDecimal(row.Cell(5));
-        var tienTraLai = GetDecimal(row.Cell(6));
-        var splitThanhTien = SplitAmount(parts, thanhTien, gia);
-        var splitTienTraLai = SplitAmount(parts, tienTraLai, null);
-        var items = new List<GiaoDich>();
-
-        for (int i = 0; i < parts.Count; i++)
-        {
-            items.Add(new GiaoDich
+            var row3 = dt.Rows[2];
+            for (int c = 4; c < dt.Columns.Count; c += 2) // 1-based col 4 = index 3
             {
-                Ngay = ngay,
-                TenLai = tenLai,
-                TenKhach = tenKhach,
-                SoCon = i == 0 ? soCon : 0,
-                SoLuong = parts[i],
-                Gia = gia,
-                ThanhTien = splitThanhTien[i],
-                TienTraLai = splitTienTraLai[i],
-                GhiChu = parts.Count > 1 ? $"Tách từ dòng Excel {row.RowNumber()}" : null
-            });
+                var cell = row3[c - 1]; // 0-based index
+                if (cell == null || cell == DBNull.Value) continue;
+                if (cell is DateTime dt2) { dates.Add(dt2.Date); continue; }
+                if (cell is double d) { dates.Add(DateTime.FromOADate(d).Date); continue; }
+                if (DateTime.TryParse(cell.ToString(), out var parsed)) dates.Add(parsed.Date);
+            }
         }
 
-        return items;
-    }
-
-    private static List<decimal> GetSoLuongParts(IXLCell cell)
-    {
-        var formula = cell.FormulaA1;
-        if (string.IsNullOrWhiteSpace(formula))
-            return new List<decimal>();
-
-        formula = formula.Trim().TrimStart('=');
-        if (!Regex.IsMatch(formula, @"^[0-9+\-.,()\s]+$"))
-            return new List<decimal>();
-
-        var parts = new List<decimal>();
-        foreach (Match match in Regex.Matches(formula, @"(?<sign>[+-]?)\s*(?<number>\d+(?:[.,]\d+)?)"))
+        for (int r = 4; r < dt.Rows.Count; r++) // data from row 5 (index 4)
         {
-            var raw = match.Groups["number"].Value.Replace(',', '.');
-            if (!decimal.TryParse(raw, NumberStyles.Number, CultureInfo.InvariantCulture, out var value))
-                continue;
+            var row = dt.Rows[r];
+            string tenKhach = GetStr(row, 1);
+            if (string.IsNullOrEmpty(tenKhach)) continue;
+            if (tenKhach.StartsWith("TỔNG", StringComparison.OrdinalIgnoreCase) ||
+                tenKhach.StartsWith("Cộng", StringComparison.OrdinalIgnoreCase)) continue;
 
-            if (match.Groups["sign"].Value == "-")
-                value = -value;
-            parts.Add(value);
+            decimal noCu = GetDec(row, 2);
+            decimal noCu2 = GetDec(row, 3);
+            khachHangs.Add(new KhachHang { TenKhach = tenKhach, NoCu = noCu != 0 ? noCu : noCu2 });
+
+            for (int d = 0; d < dates.Count; d++)
+            {
+                decimal noAmount = GetDec(row, 4 + d * 2);
+                decimal traAmount = GetDec(row, 4 + d * 2 + 1);
+
+                if (noAmount != 0)
+                    giaoDichs.Add(new GiaoDich { Ngay = dates[d], TenKhach = tenKhach, ThanhTien = noAmount, GhiChu = "Import từ báo cáo" });
+                if (traAmount != 0)
+                    traNos.Add(new TraNo { NgayTra = dates[d], TenKhach = tenKhach, SoTienTra = traAmount, GhiChu = "Import từ báo cáo" });
+            }
         }
 
-        return parts.Count > 1 ? parts : new List<decimal>();
-    }
-
-    private static List<decimal> SplitAmount(List<decimal> quantities, decimal totalAmount, decimal? price)
-    {
-        var amounts = new List<decimal>();
-        if (quantities.Count == 0) return amounts;
-
-        if (totalAmount == 0)
-        {
-            amounts.AddRange(Enumerable.Repeat(0m, quantities.Count));
-            return amounts;
-        }
-
-        if (price.HasValue)
-        {
-            amounts.AddRange(quantities.Select(q => Math.Round(q * price.Value)));
-        }
-        else
-        {
-            var totalQuantity = quantities.Sum();
-            amounts.AddRange(totalQuantity == 0
-                ? Enumerable.Repeat(0m, quantities.Count)
-                : quantities.Select(q => Math.Round(totalAmount * q / totalQuantity)));
-        }
-
-        var diff = totalAmount - amounts.Sum();
-        amounts[^1] += diff;
-        return amounts;
+        return (khachHangs, giaoDichs, traNos);
     }
 
     private void FlushGroup(string lai, List<GiaoDich> items, List<GiaoDich> result)
@@ -263,7 +288,6 @@ public class ExcelService
 
         if (items.Count > 1)
         {
-            // Detect subtotal: last row's SC ≈ sum of all previous rows' SC
             var last = items[^1];
             var sumSC = items.Take(items.Count - 1).Sum(x => x.SoCon);
             if (Math.Abs(last.SoCon - sumSC) < 0.5m)
@@ -274,142 +298,6 @@ public class ExcelService
         }
 
         result.AddRange(items);
-    }
-
-    /// <summary>
-    /// Import BÁO CÁO tổng hợp công nợ → extract KhachHang, GiaoDich aggregates, TraNo
-    /// Format: Khách | Nợ cũ | (Nợ cũ2) | [per-day Nợ|Trả pairs] | Tổng nợ
-    /// </summary>
-    public (List<KhachHang> khachHangs, List<GiaoDich> giaoDichs, List<TraNo> traNos) ImportBaoCao(Stream stream)
-    {
-        using var workbook = new XLWorkbook(stream);
-        var ws = workbook.Worksheets.First();
-        return ImportBaoCaoFromSheet(ws);
-    }
-
-    private (List<KhachHang> khachHangs, List<GiaoDich> giaoDichs, List<TraNo> traNos) ImportBaoCaoFromSheet(IXLWorksheet ws)
-    {
-        var khachHangs = new List<KhachHang>();
-        var giaoDichs = new List<GiaoDich>();
-        var traNos = new List<TraNo>();
-
-        // Parse date columns from row 3 headers
-        // Col1=Khách, Col2=Nợ cũ, Col3=(Nợ cũ merged), then pairs of (Nợ|Trả) per date, last col=Tổng nợ
-        var dates = new List<DateTime>();
-        int lastCol = ws.Row(3).LastCellUsed()?.Address.ColumnNumber ?? 0;
-
-        // Date columns start from col 4, in pairs
-        for (int c = 4; c < lastCol; c += 2)
-        {
-            var cell = ws.Cell(3, c);
-            if (!cell.IsEmpty())
-            {
-                try
-                {
-                    dates.Add(cell.GetDateTime().Date);
-                }
-                catch
-                {
-                    // Try parsing as text
-                    var text = cell.GetString().Trim();
-                    if (DateTime.TryParse(text, out var dt))
-                        dates.Add(dt.Date);
-                }
-            }
-        }
-
-        int lastRow = ws.LastRowUsed()?.RowNumber() ?? 0;
-
-        for (int r = 5; r <= lastRow; r++)
-        {
-            var row = ws.Row(r);
-            string tenKhach = row.Cell(1).IsEmpty() ? "" : row.Cell(1).GetString().Trim();
-            if (string.IsNullOrEmpty(tenKhach)) continue;
-
-            // Skip total/summary rows
-            if (tenKhach.StartsWith("TỔNG", StringComparison.OrdinalIgnoreCase) ||
-                tenKhach.StartsWith("Cộng", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            decimal noCu = GetDecimal(row.Cell(2));
-            // Col3 might also have data (second nợ cũ column or adjustment)
-            decimal noCu2 = GetDecimal(row.Cell(3));
-            decimal noCuFinal = noCu != 0 ? noCu : noCu2;
-
-            khachHangs.Add(new KhachHang { TenKhach = tenKhach, NoCu = noCuFinal });
-
-            // Parse daily Nợ/Trả amounts
-            for (int d = 0; d < dates.Count; d++)
-            {
-                int colNo = 4 + d * 2;
-                int colTra = 4 + d * 2 + 1;
-
-                decimal noAmount = GetDecimal(row.Cell(colNo));
-                decimal traAmount = GetDecimal(row.Cell(colTra));
-
-                if (noAmount != 0)
-                {
-                    giaoDichs.Add(new GiaoDich
-                    {
-                        Ngay = dates[d],
-                        TenKhach = tenKhach,
-                        ThanhTien = noAmount,
-                        GhiChu = "Import từ báo cáo"
-                    });
-                }
-
-                if (traAmount != 0)
-                {
-                    traNos.Add(new TraNo
-                    {
-                        NgayTra = dates[d],
-                        TenKhach = tenKhach,
-                        SoTienTra = traAmount,
-                        GhiChu = "Import từ báo cáo"
-                    });
-                }
-            }
-        }
-
-        return (khachHangs, giaoDichs, traNos);
-    }
-
-    private static string DetectFileType(IXLWorksheet ws)
-    {
-        var r1 = ws.Cell(1, 1).IsEmpty() ? "" : ws.Cell(1, 1).GetString();
-        if (r1.Contains("BÁO CÁO", StringComparison.OrdinalIgnoreCase) ||
-            r1.Contains("CÔNG NỢ", StringComparison.OrdinalIgnoreCase))
-            return "baocao";
-
-        int cols = ws.Row(3).LastCellUsed()?.Address.ColumnNumber ?? 0;
-        if (cols >= 10) return "baocao";
-
-        return "hangngay";
-    }
-
-    /// <summary>
-    /// Detect loại file và import trong một lần mở workbook duy nhất.
-    /// Trả về ("baocao"|"hangngay", giaoDichs, khachHangs, traNos)
-    /// </summary>
-    public (string fileType,
-            List<GiaoDich> giaoDichs,
-            List<KhachHang> khachHangs,
-            List<TraNo> traNos) DetectAndImport(Stream stream, DateTime ngay)
-    {
-        using var workbook = new XLWorkbook(stream);
-        var ws = workbook.Worksheets.First();
-        var fileType = DetectFileType(ws);
-
-        if (fileType == "baocao")
-        {
-            var (khs, gds, tns) = ImportBaoCaoFromSheet(ws);
-            return (fileType, gds, khs, tns);
-        }
-        else
-        {
-            var gds = ImportGiaoDichHangNgayFromSheet(ws, ngay);
-            return (fileType, gds, new List<KhachHang>(), new List<TraNo>());
-        }
     }
 
     /// <summary>
@@ -575,10 +463,4 @@ public class ExcelService
         return ms.ToArray();
     }
 
-    private static decimal GetDecimal(IXLCell cell)
-    {
-        if (cell.IsEmpty()) return 0;
-        try { return (decimal)cell.GetDouble(); }
-        catch { return 0; }
-    }
 }
