@@ -1247,9 +1247,9 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ===== DUAL PANEL: So sánh & hoàn thiện 2 nguồn =====
+    // ===== DUAL PANEL: Gộp Excel + Ảnh thành một bảng thống nhất =====
     (function () {
-        var dp = { excelRows: [], imageRows: [], matches: [] };
+        var dp = { excelRows: [], imageRows: [], merged: [] };
 
         function dpLoai() { var e = document.getElementById('dpLoai'); return e ? e.value : 'NhapNoMoi'; }
         function dpNguon() { var e = document.getElementById('dpNguon'); return e ? e.value : 'BH1'; }
@@ -1270,31 +1270,27 @@ document.addEventListener('DOMContentLoaded', function () {
             this.value = '';
         });
         document.getElementById('dpExcelReset').addEventListener('click', function () {
-            dp.excelRows = []; dp.matches = [];
-            dpPlaceholder('dpExcelTable', 'primary', 'bi-file-earmark-excel', 'Upload file Excel để bắt đầu');
-            document.getElementById('dpExcelCount').textContent = '0 dòng';
-            dpMsg('dpExcelMsg', '', ''); dpHideSummary(); dpUpdateSave();
+            dp.excelRows = []; dp.merged = [];
+            document.getElementById('dpExcelStatus').textContent = 'Chưa có file';
+            dpMsg('dpExcelMsg', '', ''); dpRenderMergedPlaceholder(); dpUpdateSave();
         });
         document.getElementById('dpImageReset').addEventListener('click', function () {
-            dp.imageRows = []; dp.matches = [];
-            dpPlaceholder('dpImageTable', 'success', 'bi-camera', 'Upload ảnh sổ tay (hỗ trợ nhiều ảnh)');
-            document.getElementById('dpImageCount').textContent = '0 dòng';
-            dpMsg('dpImageMsg', '', ''); dpHideSummary(); dpUpdateSave();
+            dp.imageRows = []; dp.merged = [];
+            document.getElementById('dpImageStatus').textContent = 'Chưa có ảnh';
+            dpMsg('dpImageMsg', '', ''); dpRenderMergedPlaceholder(); dpUpdateSave();
         });
         document.getElementById('dpBtnReset').addEventListener('click', function () {
-            dp.excelRows = []; dp.imageRows = []; dp.matches = [];
-            dpPlaceholder('dpExcelTable', 'primary', 'bi-file-earmark-excel', 'Upload file Excel để bắt đầu');
-            dpPlaceholder('dpImageTable', 'success', 'bi-camera', 'Upload ảnh sổ tay (hỗ trợ nhiều ảnh)');
-            document.getElementById('dpExcelCount').textContent = '0 dòng';
-            document.getElementById('dpImageCount').textContent = '0 dòng';
+            dp.excelRows = []; dp.imageRows = []; dp.merged = [];
+            document.getElementById('dpExcelStatus').textContent = 'Chưa có file';
+            document.getElementById('dpImageStatus').textContent = 'Chưa có ảnh';
             dpMsg('dpExcelMsg', '', ''); dpMsg('dpImageMsg', '', ''); dpMsg('dpSaveMsg', '', '');
-            dpHideSummary(); dpUpdateSave();
+            dpRenderMergedPlaceholder(); dpHideSummary(); dpUpdateSave();
             var b = document.getElementById('dpBtnSave');
             b.className = 'btn btn-sm btn-success'; b.innerHTML = '<i class="bi bi-check-circle"></i> Xác nhận &amp; Lưu';
         });
         btnSave.addEventListener('click', dpSave);
         document.getElementById('dpLoai').addEventListener('change', function () {
-            if (dp.excelRows.length || dp.imageRows.length) dpRunCompare();
+            if (dp.excelRows.length || dp.imageRows.length) dpRunMerge();
         });
 
         // ---- Fuzzy matching ----
@@ -1321,24 +1317,59 @@ document.addEventListener('DOMContentLoaded', function () {
             var d = dpLev(na, nb);
             return 1 - d / Math.max(na.length, nb.length);
         }
-        function dpMatch(excelRows, imageRows) {
-            var matches = excelRows.map(function (_, ei) { return { excelIdx: ei, imageIdx: -1, sim: 0 }; });
-            var used = new Set();
-            excelRows.forEach(function (er, ei) {
+
+        // ---- Merge Excel + Image into unified rows ----
+        function dpMerge() {
+            var isT = dpLoai() === 'TraNoHomNay';
+            var merged = [];
+            var usedImg = new Set();
+
+            dp.excelRows.forEach(function (er) {
                 var best = -1, bestSim = 0;
-                imageRows.forEach(function (ir, ii) {
-                    if (used.has(ii)) return;
+                dp.imageRows.forEach(function (ir, ii) {
+                    if (usedImg.has(ii)) return;
                     var s = dpSim(er.tenKhach, ir.tenKhach);
                     if (s > bestSim) { bestSim = s; best = ii; }
                 });
-                if (best >= 0 && bestSim >= 0.45) { matches[ei] = { excelIdx: ei, imageIdx: best, sim: bestSim }; used.add(best); }
+                var ir = best >= 0 && bestSim >= 0.45 ? dp.imageRows[best] : null;
+                if (ir) usedImg.add(best);
+                var conflict = ir && (isT
+                    ? Math.abs((+er.soTienTra || 0) - (+ir.soTienTra || 0)) > 1000
+                    : Math.abs((+er.soLuong || 0) - (+ir.soLuongAnh || 0)) > 0.1);
+                merged.push({
+                    source: ir ? 'both' : 'excel',
+                    tenLai: er.tenLai || '', tenKhach: er.tenKhach || '',
+                    soLuong: er.soLuong || 0, gia: er.gia || 0,
+                    thanhTien: er.thanhTien || 0, tienTraLai: er.tienTraLai || 0,
+                    soCon: er.soCon || 0, soTienTra: er.soTienTra || 0,
+                    soLuongAnh: ir ? ir.soLuongAnh : null,
+                    soTienTraAnh: ir ? ir.soTienTra : null,
+                    confidenceAnh: ir ? ir.confidence : null,
+                    sim: bestSim, hasConflict: !!conflict
+                });
             });
-            return matches;
+
+            // Image-only rows (no Excel match)
+            dp.imageRows.forEach(function (ir, ii) {
+                if (usedImg.has(ii)) return;
+                merged.push({
+                    source: 'image',
+                    tenLai: ir.tenLai || '', tenKhach: ir.tenKhach || '',
+                    soLuong: ir.soLuongAnh || 0, gia: 0,
+                    thanhTien: 0, tienTraLai: 0, soCon: 0,
+                    soTienTra: ir.soTienTra || 0,
+                    soLuongAnh: ir.soLuongAnh, soTienTraAnh: ir.soTienTra,
+                    confidenceAnh: ir.confidence, sim: 0, hasConflict: false
+                });
+            });
+
+            dp.merged = merged;
         }
 
         // ---- Upload Excel ----
         function dpUploadExcel(file) {
             dpMsg('dpExcelMsg', 'info', '<span class="spinner-border spinner-border-sm me-1"></span>Đang đọc Excel...');
+            document.getElementById('dpExcelStatus').textContent = file.name;
             var fd = new FormData();
             fd.append('file', file); fd.append('ngay', dpNgay()); fd.append('loai', dpLoai());
             fetch('/Home/ParseExcelPreview', { method: 'POST', body: fd })
@@ -1346,10 +1377,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 .then(function (d) {
                     if (d.ok) {
                         dp.excelRows = d.rows || [];
-                        document.getElementById('dpExcelCount').textContent = dp.excelRows.length + ' dòng';
+                        document.getElementById('dpExcelStatus').textContent = file.name + ' (' + dp.excelRows.length + ' dòng)';
                         dpMsg('dpExcelMsg', dp.excelRows.length ? 'success' : 'warning',
                             dp.excelRows.length ? 'Đọc được ' + dp.excelRows.length + ' dòng.' : 'Không đọc được dòng nào.');
-                        dpRunCompare();
+                        dpRunMerge();
                     } else {
                         dpMsg('dpExcelMsg', 'danger', 'Lỗi: ' + (d.error || 'Không xác định'));
                     }
@@ -1360,6 +1391,7 @@ document.addEventListener('DOMContentLoaded', function () {
         async function dpUploadImages(files) {
             dp.imageRows = [];
             for (var i = 0; i < files.length; i++) {
+                document.getElementById('dpImageStatus').textContent = 'OCR ' + (i + 1) + '/' + files.length + '...';
                 dpMsg('dpImageMsg', 'info',
                     '<span class="spinner-border spinner-border-sm me-1"></span>OCR ảnh ' + (i + 1) + '/' + files.length + '...');
                 var fd = new FormData();
@@ -1371,124 +1403,109 @@ document.addEventListener('DOMContentLoaded', function () {
                     if (!d.ok && d.error) dpMsg('dpImageMsg', 'warning', 'Ảnh ' + files[i].name + ': ' + d.error);
                 } catch (e) { dpMsg('dpImageMsg', 'warning', 'Lỗi ảnh ' + files[i].name + ': ' + e.message); }
             }
-            document.getElementById('dpImageCount').textContent = dp.imageRows.length + ' dòng';
+            document.getElementById('dpImageStatus').textContent = files.length + ' ảnh (' + dp.imageRows.length + ' dòng)';
             dpMsg('dpImageMsg', dp.imageRows.length ? 'success' : 'warning',
                 dp.imageRows.length
                     ? 'Đọc được ' + dp.imageRows.length + ' dòng từ ' + files.length + ' ảnh.'
                     : 'Không đọc được dòng nào.');
-            dpRunCompare();
+            dpRunMerge();
         }
 
-        // ---- Compare & render ----
-        function dpRunCompare() {
-            dp.matches = dpMatch(dp.excelRows, dp.imageRows);
-            dpRenderExcel();
-            dpRenderImage();
+        // ---- Run merge and render ----
+        function dpRunMerge() {
+            dpMerge();
+            dpRenderMerged();
             dpRenderSummary();
             dpUpdateSave();
         }
 
-        function dpRenderExcel() {
-            var el = document.getElementById('dpExcelTable');
+        // ---- Render unified merge table ----
+        function dpRenderMerged() {
+            var el = document.getElementById('dpMergeTable');
             if (!el) return;
-            if (!dp.excelRows.length) { dpPlaceholder('dpExcelTable', 'primary', 'bi-file-earmark-excel', 'Upload file Excel để bắt đầu'); return; }
+            if (!dp.merged.length) { dpRenderMergedPlaceholder(); return; }
             var isT = dpLoai() === 'TraNoHomNay';
+
             var h = '<table class="table table-sm table-bordered mb-0" style="font-size:.84rem">';
-            h += '<thead class="table-primary" style="position:sticky;top:0;z-index:1"><tr>';
+            h += '<thead style="position:sticky;top:0;z-index:1;background:#fff"><tr>';
             h += '<th style="width:28px">#</th>';
+            h += '<th style="width:88px">Nguồn</th>';
             if (!isT) h += '<th>Lái</th>';
             h += '<th>Khách mua</th>';
-            if (!isT) { h += '<th style="width:72px">SL(kg)</th><th style="width:72px">Giá</th><th style="width:88px">T.Tiền</th>'; }
-            else { h += '<th style="width:110px">Số tiền trả</th>'; }
-            h += '<th style="width:88px">Trạng thái</th></tr></thead><tbody>';
+            if (!isT) {
+                h += '<th style="width:88px">SL (kg)</th>';
+                h += '<th style="width:80px">Giá</th>';
+                h += '<th style="width:96px">T.Tiền</th>';
+                h += '<th style="width:88px">SL ảnh</th>';
+            } else {
+                h += '<th style="width:120px">Số tiền trả</th>';
+                h += '<th style="width:120px">Tiền (ảnh)</th>';
+            }
+            h += '<th style="width:56px">Conf</th>';
+            h += '</tr></thead><tbody>';
 
-            dp.excelRows.forEach(function (row, i) {
-                var m = dp.matches[i] || { excelIdx: i, imageIdx: -1, sim: 0 };
-                var ir = m.imageIdx >= 0 ? dp.imageRows[m.imageIdx] : null;
-                var diff = ir && (isT
-                    ? Math.abs((+row.soTienTra || 0) - (+ir.soTienTra || 0)) > 1000
-                    : Math.abs((+row.soLuong || 0) - (+ir.soLuongAnh || 0)) > 0.1);
-                var trCls = ir ? (diff ? 'table-warning' : '') : 'table-light';
-                var badge = ir
-                    ? (diff ? '<span class="badge bg-warning text-dark">⚠ Lệch</span>' : '<span class="badge bg-success">✓ Khớp</span>')
-                    : '<span class="badge bg-secondary">Chưa khớp</span>';
-                var peer = ir ? '<br><small class="text-muted">↔ ảnh #' + (m.imageIdx + 1) + '</small>' : '';
-                var slV = (diff && ir && !isT && ir.soLuongAnh != null) ? ir.soLuongAnh : (row.soLuong || '');
-                var tvV = (diff && ir && isT && ir.soTienTra != null) ? ir.soTienTra : (row.soTienTra || '');
+            dp.merged.forEach(function (row, i) {
+                var trCls = row.source === 'image' ? 'table-info'
+                    : row.hasConflict ? 'table-warning' : '';
+                var srcBadge = row.source === 'both'
+                    ? '<span class="badge" style="background:#6f42c1;font-size:.72rem">Excel+Ảnh</span>'
+                    : row.source === 'excel'
+                        ? '<span class="badge bg-primary" style="font-size:.72rem">Excel</span>'
+                        : '<span class="badge bg-success" style="font-size:.72rem">Ảnh</span>';
 
                 h += '<tr class="' + trCls + '">';
                 h += '<td class="text-muted small align-middle">' + (i + 1) + '</td>';
-                if (!isT) h += '<td><input class="form-control form-control-sm dp-ex" data-idx="' + i + '" data-f="tenLai" value="' + dpEsc(row.tenLai || '') + '"></td>';
-                h += '<td><input class="form-control form-control-sm dp-ex" data-idx="' + i + '" data-f="tenKhach" value="' + dpEsc(row.tenKhach || '') + '"></td>';
+                h += '<td class="align-middle">' + srcBadge + '</td>';
+                if (!isT) h += '<td><input class="form-control form-control-sm dp-m" data-idx="' + i + '" data-f="tenLai" value="' + dpEsc(row.tenLai) + '"></td>';
+                h += '<td><input class="form-control form-control-sm dp-m" data-idx="' + i + '" data-f="tenKhach" value="' + dpEsc(row.tenKhach) + '"></td>';
+
                 if (!isT) {
-                    h += '<td><input type="number" step="0.1" class="form-control form-control-sm dp-ex' + (diff ? ' border-danger border-2' : '') + '" data-idx="' + i + '" data-f="soLuong" value="' + slV + '"></td>';
-                    h += '<td><input type="number" class="form-control form-control-sm dp-ex" data-idx="' + i + '" data-f="gia" value="' + (row.gia || '') + '"></td>';
-                    h += '<td><input type="number" class="form-control form-control-sm dp-ex" data-idx="' + i + '" data-f="thanhTien" value="' + (row.thanhTien || '') + '"></td>';
+                    var slCls = row.hasConflict ? ' border-danger border-2' : '';
+                    h += '<td><input type="number" step="0.1" class="form-control form-control-sm dp-m' + slCls + '" data-idx="' + i + '" data-f="soLuong" value="' + (row.soLuong || '') + '"></td>';
+                    h += '<td><input type="number" class="form-control form-control-sm dp-m" data-idx="' + i + '" data-f="gia" value="' + (row.gia || '') + '"></td>';
+                    h += '<td><input type="number" class="form-control form-control-sm dp-m" data-idx="' + i + '" data-f="thanhTien" value="' + (row.thanhTien || '') + '"></td>';
+                    var slAnh = row.soLuongAnh != null ? row.soLuongAnh + ' kg' : '—';
+                    h += '<td class="align-middle text-end small ' + (row.hasConflict ? 'text-danger fw-bold' : 'text-muted') + '">' + slAnh + '</td>';
                 } else {
-                    h += '<td><input type="number" class="form-control form-control-sm dp-ex' + (diff ? ' border-danger border-2' : '') + '" data-idx="' + i + '" data-f="soTienTra" value="' + tvV + '"></td>';
+                    var tvCls = row.hasConflict ? ' border-danger border-2' : '';
+                    h += '<td><input type="number" class="form-control form-control-sm dp-m' + tvCls + '" data-idx="' + i + '" data-f="soTienTra" value="' + (row.soTienTra || '') + '"></td>';
+                    var tvAnh = row.soTienTraAnh != null ? Math.round(+row.soTienTraAnh).toLocaleString('vi-VN') + 'đ' : '—';
+                    h += '<td class="align-middle text-end small ' + (row.hasConflict ? 'text-danger fw-bold' : 'text-muted') + '">' + tvAnh + '</td>';
                 }
-                h += '<td class="align-middle small">' + badge + peer + '</td></tr>';
+
+                var conf = row.confidenceAnh;
+                if (conf != null) {
+                    var cBg = conf >= 0.85 ? 'bg-success' : conf >= 0.7 ? 'bg-warning text-dark' : 'bg-danger';
+                    h += '<td class="align-middle"><span class="badge ' + cBg + '">' + Math.round(conf * 100) + '%</span></td>';
+                } else {
+                    h += '<td class="text-muted small align-middle text-center">—</td>';
+                }
+                h += '</tr>';
             });
+
             h += '</tbody></table>';
             el.innerHTML = h;
-            el.querySelectorAll('.dp-ex').forEach(function (inp) {
+            el.querySelectorAll('.dp-m').forEach(function (inp) {
                 inp.addEventListener('change', function () {
                     var idx = +this.dataset.idx;
-                    if (dp.excelRows[idx]) dp.excelRows[idx][this.dataset.f] = this.value;
+                    if (dp.merged[idx]) dp.merged[idx][this.dataset.f] = this.value;
                 });
             });
         }
 
-        function dpRenderImage() {
-            var el = document.getElementById('dpImageTable');
-            if (!el) return;
-            if (!dp.imageRows.length) { dpPlaceholder('dpImageTable', 'success', 'bi-camera', 'Upload ảnh sổ tay (hỗ trợ nhiều ảnh)'); return; }
-            var isT = dpLoai() === 'TraNoHomNay';
-            var rev = {};
-            dp.matches.forEach(function (m) { if (m.imageIdx >= 0) rev[m.imageIdx] = m.excelIdx; });
-
-            var h = '<table class="table table-sm table-bordered mb-0" style="font-size:.84rem">';
-            h += '<thead class="table-success" style="position:sticky;top:0;z-index:1"><tr>';
-            h += '<th style="width:28px">#</th><th style="width:50px">Conf</th><th>Tên khách (OCR)</th>';
-            h += '<th style="width:' + (isT ? 100 : 72) + 'px">' + (isT ? 'Số tiền' : 'SL ảnh') + '</th>';
-            h += '<th style="width:68px">Khớp</th></tr></thead><tbody>';
-
-            dp.imageRows.forEach(function (ir, i) {
-                var exIdx = rev.hasOwnProperty(i) ? rev[i] : -1;
-                var conf = +(ir.confidence || 0);
-                var cBg = conf >= 0.85 ? 'bg-success' : conf >= 0.7 ? 'bg-warning text-dark' : 'bg-danger';
-                var amt = isT
-                    ? (ir.soTienTra != null ? Math.round(+ir.soTienTra).toLocaleString('vi-VN') + 'đ' : '—')
-                    : (ir.soLuongAnh != null ? ir.soLuongAnh + ' kg' : '—');
-                var mBadge = exIdx >= 0
-                    ? '<span class="badge bg-primary">Excel #' + (exIdx + 1) + '</span>'
-                    : '<span class="badge bg-info text-dark">Chưa</span>';
-
-                h += '<tr class="' + (exIdx < 0 ? 'table-info' : '') + '">';
-                h += '<td class="text-muted small align-middle">' + (i + 1) + '</td>';
-                h += '<td><span class="badge ' + cBg + '">' + Math.round(conf * 100) + '%</span></td>';
-                h += '<td class="align-middle">' + dpEsc(ir.tenKhach || '—');
-                if (ir.tenLai) h += '<br><small class="text-muted">Lái: ' + dpEsc(ir.tenLai) + '</small>';
-                h += '</td><td class="align-middle text-end">' + amt + '</td>';
-                h += '<td class="align-middle">' + mBadge + '</td></tr>';
-            });
-            h += '</tbody></table>';
-            el.innerHTML = h;
+        function dpRenderMergedPlaceholder() {
+            var el = document.getElementById('dpMergeTable');
+            if (el) el.innerHTML = '<div class="p-5 text-center text-muted"><i class="bi bi-layers fs-1 d-block opacity-25 mb-2"></i>Upload Excel và/hoặc Ảnh để xem dữ liệu gộp</div>';
+            dpHideSummary();
         }
 
         function dpRenderSummary() {
-            var isT = dpLoai() === 'TraNoHomNay';
-            var usedImg = new Set(dp.matches.filter(function (m) { return m.imageIdx >= 0; }).map(function (m) { return m.imageIdx; }));
             var nOk = 0, nDiff = 0, nExOnly = 0, nImOnly = 0;
-            dp.matches.forEach(function (m, i) {
-                if (m.imageIdx < 0) { nExOnly++; return; }
-                var ir = dp.imageRows[m.imageIdx], er = dp.excelRows[i];
-                var d = isT
-                    ? Math.abs((+er.soTienTra || 0) - (+ir.soTienTra || 0)) > 1000
-                    : Math.abs((+er.soLuong || 0) - (+ir.soLuongAnh || 0)) > 0.1;
-                d ? nDiff++ : nOk++;
+            dp.merged.forEach(function (m) {
+                if (m.source === 'both') { m.hasConflict ? nDiff++ : nOk++; }
+                else if (m.source === 'excel') nExOnly++;
+                else nImOnly++;
             });
-            dp.imageRows.forEach(function (_, i) { if (!usedImg.has(i)) nImOnly++; });
             document.getElementById('dpSumMatched').textContent = nOk + ' khớp';
             document.getElementById('dpSumDiff').textContent = nDiff + ' lệch';
             document.getElementById('dpSumExcelOnly').textContent = nExOnly + ' chỉ Excel';
@@ -1498,15 +1515,16 @@ document.addEventListener('DOMContentLoaded', function () {
 
         function dpUpdateSave() {
             var b = document.getElementById('dpBtnSave');
-            if (b) b.disabled = !dp.excelRows.length;
+            if (b) b.disabled = !dp.merged.length;
         }
 
-        // ---- Save ----
+        // ---- Save all merged rows ----
         function dpSave() {
-            var isT = dpLoai() === 'TraNoHomNay';
-            var rows = dp.excelRows.map(function (row, i) {
+            var rows = dp.merged.map(function (row, i) {
                 var r = Object.assign({}, row);
-                document.querySelectorAll('.dp-ex[data-idx="' + i + '"]').forEach(function (inp) { r[inp.dataset.f] = inp.value; });
+                document.querySelectorAll('.dp-m[data-idx="' + i + '"]').forEach(function (inp) {
+                    r[inp.dataset.f] = inp.value;
+                });
                 return {
                     tenLai: r.tenLai || null, tenKhach: r.tenKhach || null,
                     soCon: +(r.soCon) || 0, soLuong: +(r.soLuong) || 0,
@@ -1542,14 +1560,10 @@ document.addEventListener('DOMContentLoaded', function () {
         // ---- Helpers ----
         function dpMsg(id, type, text) {
             var el = document.getElementById(id); if (!el) return;
-            if (!text) { el.className = 'px-3 py-1 small d-none'; el.innerHTML = ''; return; }
+            if (!text) { el.className = 'px-2 py-1 small d-none'; el.innerHTML = ''; return; }
             var c = { info: 'text-primary', success: 'text-success', warning: 'text-warning', danger: 'text-danger' };
-            el.className = 'px-3 py-1 small ' + (c[type] || '');
+            el.className = 'px-2 py-1 small ' + (c[type] || '');
             el.innerHTML = text;
-        }
-        function dpPlaceholder(id, color, icon, text) {
-            var el = document.getElementById(id);
-            if (el) el.innerHTML = '<div class="p-4 text-center text-muted"><i class="bi ' + icon + ' fs-1 d-block text-' + color + ' opacity-25 mb-2"></i>' + text + '</div>';
         }
         function dpHideSummary() { var e = document.getElementById('dpSummaryBar'); if (e) e.classList.add('d-none'); }
         function dpEsc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }

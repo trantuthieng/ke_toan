@@ -1234,14 +1234,15 @@ public class HomeController : Controller
             }
             else
             {
-                if ((row.SoLuong ?? 0) <= 0) continue;
+                var soLuong = (row.SoLuong ?? 0) > 0 ? row.SoLuong!.Value : (row.SoLuongAnh ?? 0);
+                if (soLuong <= 0) continue;
                 _db.GiaoDichs.Add(new GiaoDich
                 {
                     Ngay = date,
                     TenLai = string.IsNullOrWhiteSpace(row.TenLai) ? "" : row.TenLai!.Trim(),
                     TenKhach = string.IsNullOrWhiteSpace(row.TenKhach) ? "" : row.TenKhach!.Trim(),
                     SoCon = row.SoCon ?? 0,
-                    SoLuong = row.SoLuong ?? 0,
+                    SoLuong = soLuong,
                     SoLuongAnh = row.SoLuongAnh,
                     Gia = row.Gia ?? 0,
                     ThanhTien = row.ThanhTien ?? 0,

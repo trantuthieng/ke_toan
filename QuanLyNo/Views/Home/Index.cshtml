@@ -502,7 +502,7 @@
 
         <!-- Header controls -->
         <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
-            <span class="fw-semibold"><i class="bi bi-arrow-left-right"></i> So sánh &amp; hoàn thiện - @today.ToString("dd/MM/yyyy")</span>
+            <span class="fw-semibold"><i class="bi bi-layers"></i> Gộp &amp; hoàn thiện — @today.ToString("dd/MM/yyyy")</span>
             <select id="dpLoai" class="form-select form-select-sm" style="width:160px">
                 <option value="NhapNoMoi">Nhập nợ mới</option>
                 <option value="TraNoHomNay">Trả nợ hôm nay</option>
@@ -522,62 +522,49 @@
             </div>
         </div>
 
-        <!-- 2 columns -->
-        <div class="row g-3">
-            <!-- LEFT: Excel (có thể sửa) -->
-            <div class="col-12 col-lg-6">
-                <div class="card border-primary h-100">
-                    <div class="card-header bg-primary text-white py-2 d-flex justify-content-between align-items-center">
-                        <span><i class="bi bi-file-earmark-excel"></i> Bên Excel <span class="badge bg-white text-primary ms-1" id="dpExcelCount">0 dòng</span></span>
-                        <div class="d-flex gap-1">
-                            <label class="btn btn-sm btn-outline-light mb-0" for="dpExcelFile">
-                                <i class="bi bi-upload"></i> Upload Excel
-                            </label>
-                            <input type="file" id="dpExcelFile" accept=".xlsx,.xls" class="d-none" />
-                            <button class="btn btn-sm btn-outline-light" id="dpExcelReset" type="button" title="Xóa dữ liệu Excel">
-                                <i class="bi bi-x-lg"></i>
-                            </button>
-                        </div>
-                    </div>
-                    <div id="dpExcelMsg" class="px-3 py-1 small d-none"></div>
-                    <div id="dpExcelTable" style="overflow-x:auto; max-height:540px; overflow-y:auto;">
-                        <div class="p-4 text-center text-muted">
-                            <i class="bi bi-file-earmark-excel fs-1 d-block text-primary opacity-25 mb-2"></i>
-                            Upload file Excel để bắt đầu
-                        </div>
-                    </div>
+        <!-- Upload inputs (compact row) -->
+        <div class="row g-2 mb-3">
+            <div class="col-12 col-md-6">
+                <div class="border rounded p-2 d-flex align-items-center gap-2">
+                    <i class="bi bi-file-earmark-excel text-primary fs-5 flex-shrink-0"></i>
+                    <label class="btn btn-sm btn-outline-primary mb-0 flex-shrink-0" for="dpExcelFile">
+                        <i class="bi bi-upload"></i> Excel
+                    </label>
+                    <input type="file" id="dpExcelFile" accept=".xlsx,.xls" class="d-none" />
+                    <span id="dpExcelStatus" class="small text-muted text-truncate flex-grow-1">Chưa có file</span>
+                    <button class="btn btn-sm btn-link text-muted p-0 flex-shrink-0" id="dpExcelReset" title="Xóa Excel">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
                 </div>
+                <div id="dpExcelMsg" class="px-2 py-1 small d-none mt-1"></div>
             </div>
-
-            <!-- RIGHT: Image OCR (chuẩn) -->
-            <div class="col-12 col-lg-6">
-                <div class="card border-success h-100">
-                    <div class="card-header bg-success text-white py-2 d-flex justify-content-between align-items-center">
-                        <span><i class="bi bi-camera"></i> Bên Ảnh (chuẩn) <span class="badge bg-white text-success ms-1" id="dpImageCount">0 dòng</span></span>
-                        <div class="d-flex gap-1">
-                            <label class="btn btn-sm btn-outline-light mb-0" for="dpImageFiles">
-                                <i class="bi bi-upload"></i> Upload Ảnh
-                            </label>
-                            <input type="file" id="dpImageFiles" accept="image/*" multiple class="d-none" />
-                            <button class="btn btn-sm btn-outline-light" id="dpImageReset" type="button" title="Xóa dữ liệu ảnh">
-                                <i class="bi bi-x-lg"></i>
-                            </button>
-                        </div>
-                    </div>
-                    <div id="dpImageMsg" class="px-3 py-1 small d-none"></div>
-                    <div id="dpImageTable" style="overflow-x:auto; max-height:540px; overflow-y:auto;">
-                        <div class="p-4 text-center text-muted">
-                            <i class="bi bi-camera fs-1 d-block text-success opacity-25 mb-2"></i>
-                            Upload ảnh sổ tay (hỗ trợ nhiều ảnh)
-                        </div>
-                    </div>
+            <div class="col-12 col-md-6">
+                <div class="border rounded p-2 d-flex align-items-center gap-2">
+                    <i class="bi bi-camera text-success fs-5 flex-shrink-0"></i>
+                    <label class="btn btn-sm btn-outline-success mb-0 flex-shrink-0" for="dpImageFiles">
+                        <i class="bi bi-upload"></i> Ảnh
+                    </label>
+                    <input type="file" id="dpImageFiles" accept="image/*" multiple class="d-none" />
+                    <span id="dpImageStatus" class="small text-muted text-truncate flex-grow-1">Chưa có ảnh</span>
+                    <button class="btn btn-sm btn-link text-muted p-0 flex-shrink-0" id="dpImageReset" title="Xóa Ảnh">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
                 </div>
+                <div id="dpImageMsg" class="px-2 py-1 small d-none mt-1"></div>
+            </div>
+        </div>
+
+        <!-- Unified merge table -->
+        <div id="dpMergeTable" style="overflow-x:auto; max-height:560px; overflow-y:auto;">
+            <div class="p-5 text-center text-muted">
+                <i class="bi bi-layers fs-1 d-block opacity-25 mb-2"></i>
+                Upload Excel và/hoặc Ảnh để xem dữ liệu gộp
             </div>
         </div>
 
         <!-- Summary bar -->
         <div id="dpSummaryBar" class="d-none mt-3 p-2 rounded border small d-flex flex-wrap gap-2 align-items-center">
-            <strong>Kết quả so sánh:</strong>
+            <strong>Tổng hợp:</strong>
             <span id="dpSumMatched" class="badge bg-success">0 khớp</span>
             <span id="dpSumDiff" class="badge bg-warning text-dark">0 lệch</span>
             <span id="dpSumExcelOnly" class="badge bg-secondary">0 chỉ Excel</span>
