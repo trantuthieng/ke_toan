@@ -223,14 +223,30 @@ public class GeminiImageParser
             {schema}
 
             Quy tắc bắt buộc:
+
+            TÊN KHÁCH:
             - tenKhach: tên người/khách hàng đọc được trên dòng đó. Giữ nguyên dấu tiếng Việt.
             - tenLai: LUÔN để null. Chỉ điền nếu ảnh ghi rõ nhãn "Lái:" hoặc "lái:" trước tên.
             - Ký hiệu tiền tố như R, J, S, x, ×, u, δ, + đứng trước tên là ký hiệu loại hàng — BỎ QUA, không đưa vào tenKhach.
+            - Số trong ngoặc đứng đầu dòng như "(8)", "(4.5)", "(4đ)", "(1.5)" là số lần mua/thưởng — BỎ QUA, không đưa vào tenKhach.
+            - Nếu đầu dòng chỉ có số trong ngoặc mà không có tên, tenKhach = null.
+            - Dòng phân cách "—" hoặc dấu gạch ngang không có tên = khách ẩn danh, tenKhach = null.
+
+            ĐỌC SỐ:
+            - Số viết có dấu chấm ở đầu như ".601", ".88", ".95" là số bình thường — đọc là 601, 88, 95 (dấu chấm là ký hiệu ngăn cách trong sổ tay, KHÔNG phải dấu thập phân).
+            - Số thập phân thật sự viết dấu phẩy hoặc chấm ở giữa: "88.3", "92,5" → đọc đúng là 88.3 hoặc 92.5.
+            - Nếu không chắc một ký tự là chữ hay số (C vs 6, O vs 0, l vs 1), đoán theo ngữ cảnh số kg hợp lý và ghi rawLine.
             {soLuongRule}
             {soTienRule}
+            - KHÔNG bao giờ trả về null cho soLuongAnh nếu dòng có một con số rõ ràng; khi đọc không chắc thì để confidence thấp nhưng vẫn điền soLuongAnh.
+
+            NHÓM DẤU NGOẶC:
+            - Khi nhiều dòng số kg được gộp trong một dấu ngoặc vuông "]" và chỉ có một tên khách, trích xuất TỪNG dòng riêng với cùng tên khách đó.
+
+            CHUNG:
             - confidence: từ 0.0 đến 1.0, phản ánh độ chắc chắn khi đọc dòng đó.
             - Giữ đúng thứ tự dòng từ trên xuống dưới.
-            - Nếu không chắc thì để null và confidence thấp, không tự đoán.
+            - rawLine: ghi nguyên văn ký tự đọc được từ dòng đó trong ảnh.
             """;
     }
 
