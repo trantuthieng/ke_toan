@@ -15,9 +15,14 @@ public class ExcelService
     /// </summary>
     public List<GiaoDich> ImportGiaoDichHangNgay(Stream stream, DateTime ngay)
     {
-        var allItems = new List<GiaoDich>();
         using var workbook = new XLWorkbook(stream);
         var ws = workbook.Worksheets.First();
+        return ImportGiaoDichHangNgayFromSheet(ws, ngay);
+    }
+
+    private List<GiaoDich> ImportGiaoDichHangNgayFromSheet(IXLWorksheet ws, DateTime ngay)
+    {
+        var allItems = new List<GiaoDich>();
 
         if (IsKhachHangLaiFormat(ws))
             return ImportKhachHangLaiFormat(ws, ngay);
@@ -277,12 +282,16 @@ public class ExcelService
     /// </summary>
     public (List<KhachHang> khachHangs, List<GiaoDich> giaoDichs, List<TraNo> traNos) ImportBaoCao(Stream stream)
     {
+        using var workbook = new XLWorkbook(stream);
+        var ws = workbook.Worksheets.First();
+        return ImportBaoCaoFromSheet(ws);
+    }
+
+    private (List<KhachHang> khachHangs, List<GiaoDich> giaoDichs, List<TraNo> traNos) ImportBaoCaoFromSheet(IXLWorksheet ws)
+    {
         var khachHangs = new List<KhachHang>();
         var giaoDichs = new List<GiaoDich>();
         var traNos = new List<TraNo>();
-
-        using var workbook = new XLWorkbook(stream);
-        var ws = workbook.Worksheets.First();
 
         // Parse date columns from row 3 headers
         // Col1=Khách, Col2=Nợ cũ, Col3=(Nợ cũ merged), then pairs of (Nợ|Trả) per date, last col=Tổng nợ
@@ -365,26 +374,42 @@ public class ExcelService
         return (khachHangs, giaoDichs, traNos);
     }
 
-    /// <summary>
-    /// Tự động phát hiện loại file: "baocao" hoặc "hangngay"
-    /// </summary>
-    public string DetectFileType(Stream stream)
+    private static string DetectFileType(IXLWorksheet ws)
     {
-        stream.Position = 0;
-        using var workbook = new XLWorkbook(stream);
-        var ws = workbook.Worksheets.First();
-
-        // Check row 1 for "BÁO CÁO" keyword
         var r1 = ws.Cell(1, 1).IsEmpty() ? "" : ws.Cell(1, 1).GetString();
         if (r1.Contains("BÁO CÁO", StringComparison.OrdinalIgnoreCase) ||
             r1.Contains("CÔNG NỢ", StringComparison.OrdinalIgnoreCase))
             return "baocao";
 
-        // Check if row 3 has many columns (report has 10+ columns)
         int cols = ws.Row(3).LastCellUsed()?.Address.ColumnNumber ?? 0;
         if (cols >= 10) return "baocao";
 
         return "hangngay";
+    }
+
+    /// <summary>
+    /// Detect loại file và import trong một lần mở workbook duy nhất.
+    /// Trả về ("baocao"|"hangngay", giaoDichs, khachHangs, traNos)
+    /// </summary>
+    public (string fileType,
+            List<GiaoDich> giaoDichs,
+            List<KhachHang> khachHangs,
+            List<TraNo> traNos) DetectAndImport(Stream stream, DateTime ngay)
+    {
+        using var workbook = new XLWorkbook(stream);
+        var ws = workbook.Worksheets.First();
+        var fileType = DetectFileType(ws);
+
+        if (fileType == "baocao")
+        {
+            var (khs, gds, tns) = ImportBaoCaoFromSheet(ws);
+            return (fileType, gds, khs, tns);
+        }
+        else
+        {
+            var gds = ImportGiaoDichHangNgayFromSheet(ws, ngay);
+            return (fileType, gds, new List<KhachHang>(), new List<TraNo>());
+        }
     }
 
     /// <summary>

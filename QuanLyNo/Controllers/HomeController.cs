@@ -254,6 +254,13 @@ public class HomeController : Controller
             return RedirectToAction(nameof(Index));
         }
 
+        const long maxBytes = 8 * 1024 * 1024; // 8 MB
+        if (file.Length > maxBytes)
+        {
+            TempData["Error"] = $"File quá lớn ({file.Length / 1024 / 1024} MB). Giới hạn tối đa 8 MB.";
+            return RedirectToAction(nameof(Index));
+        }
+
         var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
         if (ext != ".xlsx" && ext != ".xls")
         {
@@ -265,17 +272,14 @@ public class HomeController : Controller
         await file.CopyToAsync(stream);
         stream.Position = 0;
 
-        // Auto-detect file type
-        var fileType = _excel.DetectFileType(stream);
-        stream.Position = 0;
+        var ngayImport = ngayGiaoDich ?? DateTime.Today;
+        var (fileType, giaoDichsResult, khachHangsResult, traNosResult) =
+            _excel.DetectAndImport(stream, ngayImport);
 
         if (fileType == "baocao")
         {
-            // Import BÁO CÁO → KhachHang + aggregated GiaoDich + TraNo
-            var (khachHangs, giaoDichs, traNos) = _excel.ImportBaoCao(stream);
-
             int addedKH = 0;
-            foreach (var kh in khachHangs)
+            foreach (var kh in khachHangsResult)
             {
                 var existing = await _db.KhachHangs
                     .FirstOrDefaultAsync(k => k.TenKhach == kh.TenKhach);
@@ -290,33 +294,28 @@ public class HomeController : Controller
                 }
             }
 
-            _db.GiaoDichs.AddRange(giaoDichs);
-            _db.TraNos.AddRange(traNos);
+            _db.GiaoDichs.AddRange(giaoDichsResult);
+            _db.TraNos.AddRange(traNosResult);
             await _db.SaveChangesAsync();
 
-            TempData["Success"] = $"Import BÁO CÁO: {addedKH} khách hàng mới, {giaoDichs.Count} khoản nợ, {traNos.Count} khoản trả.";
+            TempData["Success"] = $"Import BÁO CÁO: {addedKH} khách hàng mới, {giaoDichsResult.Count} khoản nợ, {traNosResult.Count} khoản trả.";
         }
         else
         {
-            // Import daily transactions
-            var ngay = ngayGiaoDich ?? DateTime.Today;
-            var giaoDichs = _excel.ImportGiaoDichHangNgay(stream, ngay);
-
-            if (giaoDichs.Count == 0)
+            if (giaoDichsResult.Count == 0)
             {
                 TempData["Error"] = "Không đọc được dữ liệu từ file Excel.";
                 return RedirectToAction(nameof(Index));
             }
 
-            _db.GiaoDichs.AddRange(giaoDichs);
+            _db.GiaoDichs.AddRange(giaoDichsResult);
 
-            // Auto-create KhachHang records
-            var newNames = giaoDichs.Select(g => g.TenKhach).Distinct();
+            var newNames = giaoDichsResult.Select(g => g.TenKhach).Distinct();
             foreach (var name in newNames)
                 await EnsureKhachHang(name);
 
             await _db.SaveChangesAsync();
-            TempData["Success"] = $"Đã import {giaoDichs.Count} giao dịch ngày {ngay:dd/MM/yyyy}.";
+            TempData["Success"] = $"Đã import {giaoDichsResult.Count} giao dịch ngày {ngayImport:dd/MM/yyyy}.";
         }
 
         return RedirectToAction(nameof(Index));
