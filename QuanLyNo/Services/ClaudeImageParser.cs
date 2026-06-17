@@ -46,7 +46,7 @@ public class ClaudeImageParser
             var parameters = new MessageCreateParams
             {
                 Model = model,
-                MaxTokens = 4096,
+                MaxTokens = 8000,
             
                 Messages =
                 [

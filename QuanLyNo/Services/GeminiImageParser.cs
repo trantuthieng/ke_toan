@@ -144,7 +144,7 @@ public class GeminiImageParser
             var payload = new
             {
                 model,
-                max_tokens = 2048,
+                max_tokens = 8000,
                 messages = new[]
                 {
                     new
@@ -213,7 +213,7 @@ public class GeminiImageParser
             ? "- soTienTra: số tiền trả của dòng đó."
             : "- soTienTra: luôn null (không có cột tiền trong ảnh nhập nợ).";
 
-        var schema = "{\"rawText\":\"toàn bộ chữ/số đọc được\",\"rows\":[{\"imageOrder\":1,\"tenLai\":null,\"tenKhach\":\"tên khách\",\"soLuongAnh\":12.3,\"soTienTra\":null,\"confidence\":0.9,\"rawLine\":\"nguyên dòng\"}]}";
+        var schema = "{\"rawText\":null,\"rows\":[{\"imageOrder\":1,\"tenLai\":null,\"tenKhach\":\"tên khách\",\"soLuongAnh\":12.3,\"soTienTra\":null,\"confidence\":0.9,\"rawLine\":\"tên+số\"}]}";
 
         return $"""
             Bạn là bộ đọc dữ liệu kế toán từ ảnh chụp sổ tay tiếng Việt viết tay.
@@ -261,8 +261,10 @@ public class GeminiImageParser
 
             ════ CHUNG ════
             - confidence: 0.0–1.0, phản ánh độ chắc chắn đọc dòng.
-            - rawLine: ghi nguyên văn ký tự đọc được từ dòng đó.
+            - rawLine: tối đa 20 ký tự, chỉ ghi tên + số chính (vd "Thúy 96", "695").
+            - rawText: để null (không ghi lại toàn bộ trang — tiết kiệm token).
             - Giữ đúng thứ tự dòng từ trên xuống dưới.
+            - PHẢI đọc và trả về TẤT CẢ các dòng có số kg/tiền trong ảnh, không bỏ sót.
             """;
     }
 
