@@ -198,7 +198,7 @@ public class GeminiImageParser
         }
     }
 
-    private static string BuildPrompt(string importType)
+    internal static string BuildPrompt(string importType)
     {
         var isTraNo = importType == "TraNoHomNay";
         var task = isTraNo
@@ -207,7 +207,7 @@ public class GeminiImageParser
 
         var soLuongRule = isTraNo
             ? "- soLuongAnh: luôn null (không có cột kg trong ảnh trả nợ)."
-            : "- soLuongAnh: số kg hoặc số lượng trên dòng đó, dùng dấu chấm thập phân.";
+            : "- soLuongAnh: số kg/số lượng của dòng đó, dùng dấu chấm thập phân.";
 
         var soTienRule = isTraNo
             ? "- soTienTra: số tiền trả của dòng đó."
@@ -216,37 +216,53 @@ public class GeminiImageParser
         var schema = "{\"rawText\":\"toàn bộ chữ/số đọc được\",\"rows\":[{\"imageOrder\":1,\"tenLai\":null,\"tenKhach\":\"tên khách\",\"soLuongAnh\":12.3,\"soTienTra\":null,\"confidence\":0.9,\"rawLine\":\"nguyên dòng\"}]}";
 
         return $"""
-            Bạn là bộ đọc dữ liệu kế toán từ ảnh chụp sổ tay tiếng Việt.
+            Bạn là bộ đọc dữ liệu kế toán từ ảnh chụp sổ tay tiếng Việt viết tay.
             Nhiệm vụ: {task}.
 
             Chỉ trả về JSON hợp lệ, không markdown, theo schema:
             {schema}
 
-            Quy tắc bắt buộc:
+            ════ CẤU TRÚC TRANG ════
+            Mỗi trang ghi nhiều khách hàng. Cấu trúc điển hình một nhóm:
+              [Tên]  [kg1]  [kg2] ]  ×[giá]   [thành tiền 5-6 chữ số]
+                     [kg3]  [kg4] ]
 
-            TÊN KHÁCH:
-            - tenKhach: tên người/khách hàng đọc được trên dòng đó. Giữ nguyên dấu tiếng Việt.
-            - tenLai: LUÔN để null. Chỉ điền nếu ảnh ghi rõ nhãn "Lái:" hoặc "lái:" trước tên.
-            - Ký hiệu tiền tố như R, J, S, x, ×, u, δ, + đứng trước tên là ký hiệu loại hàng — BỎ QUA, không đưa vào tenKhach.
-            - Số trong ngoặc đứng đầu dòng như "(8)", "(4.5)", "(4đ)", "(1.5)" là số lần mua/thưởng — BỎ QUA, không đưa vào tenKhach.
-            - Nếu đầu dòng chỉ có số trong ngoặc mà không có tên, tenKhach = null.
-            - Dòng phân cách "—" hoặc dấu gạch ngang không có tên = khách ẩn danh, tenKhach = null.
+            ════ NHÓM NGOẶC — QUAN TRỌNG ════
+            - Khi nhiều dòng số kg gộp trong dấu ngoặc vuông "]" với một tên duy nhất ở đầu nhóm:
+              → Dòng đầu có tên: dùng tên đó, tạo row với soLuongAnh
+              → Các dòng tiếp theo KHÔNG CÓ TÊN trong cùng nhóm: kế thừa tên dòng đầu nhóm, tạo row riêng
+            - Nhiều số kg trên CÙNG MỘT DÒNG (vd "695 683", "829, 878", "1036 96"):
+              → Tạo NHIỀU row riêng, mỗi số một row, cùng tenKhach
 
-            ĐỌC SỐ:
-            - Số viết có dấu chấm ở đầu như ".601", ".88", ".95" là số bình thường — đọc là 601, 88, 95 (dấu chấm là ký hiệu ngăn cách trong sổ tay, KHÔNG phải dấu thập phân).
-            - Số thập phân thật sự viết dấu phẩy hoặc chấm ở giữa: "88.3", "92,5" → đọc đúng là 88.3 hoặc 92.5.
-            - Nếu không chắc một ký tự là chữ hay số (C vs 6, O vs 0, l vs 1), đoán theo ngữ cảnh số kg hợp lý và ghi rawLine.
+            ════ BỎ QUA — KHÔNG TẠO ROW ════
+            - Dòng điều chỉnh/khấu trừ: bắt đầu bằng "-" (vd "-2", "-808", "-0.5", "-3kolu", "-1lu")
+            - Đơn giá: số ngay sau "×" hoặc "x" (vd "×75", "×82") — đây là GIÁ/KG, không phải kg
+            - Thành tiền: số 5-6 chữ số đứng cuối dòng/nhóm (vd 15142, 12206, 21940) — là tổng tiền
+            - Đơn vị lượt: số dạng "Nlu", "1lu", "2lu" — là số chuyến, không phải kg
+            - Dòng tổng kết: chứa "✿", "★", "※", ký hiệu "→" kèm số lớn, hoặc dạng "NNc = M.MMM → K.KKK"
+            - Số trong ngoặc đầu dòng: "(8)", "(4.5)", "(4đ)", "(1.5)" — số lần mua/ngày, không phải kg
+
+            ════ TÊN KHÁCH ════
+            - tenKhach: tên người/khách đọc được đầu dòng, giữ nguyên dấu tiếng Việt.
+            - Tên thường là tên người Việt (Thúy, Hương, Lan, Dung, Huê...) hoặc mã ngắn (T10, V1, V2).
+              Nếu đọc ra chuỗi không giống tên Việt (vd "Play", "Job"), hãy đọc lại cẩn thận và để confidence thấp.
+            - tenLai: LUÔN null. Chỉ điền khi ảnh ghi rõ "Lái:" hoặc "lái:" trước tên.
+            - Bỏ ký hiệu tiền tố R, J, S, x, ×, u, δ, + đứng trước tên — không đưa vào tenKhach.
+            - Dòng chỉ có số trong ngoặc không kèm tên → tenKhach = null.
+            - Dòng phân cách "—" hay chỉ dấu gạch ngang → tenKhach = null (khách ẩn danh).
+
+            ════ ĐỌC SỐ ════
+            - Số có dấu chấm ĐẦU: ".601", ".88", ".95" → đọc là 601, 88, 95 (dấu chấm là ký hiệu ngăn cách, KHÔNG phải thập phân).
+            - Số thập phân thật: "88.3", "92,5" → đọc đúng là 88.3 / 92.5.
+            - Ký tự mơ hồ (C↔6, O↔0, l↔1, n↔u): đoán theo ngữ cảnh kg hợp lý (thường 10–2000), ghi rawLine.
             {soLuongRule}
             {soTienRule}
-            - KHÔNG bao giờ trả về null cho soLuongAnh nếu dòng có một con số rõ ràng; khi đọc không chắc thì để confidence thấp nhưng vẫn điền soLuongAnh.
+            - KHÔNG trả null cho soLuongAnh nếu dòng có số rõ ràng; không chắc thì confidence thấp, vẫn điền.
 
-            NHÓM DẤU NGOẶC:
-            - Khi nhiều dòng số kg được gộp trong một dấu ngoặc vuông "]" và chỉ có một tên khách, trích xuất TỪNG dòng riêng với cùng tên khách đó.
-
-            CHUNG:
-            - confidence: từ 0.0 đến 1.0, phản ánh độ chắc chắn khi đọc dòng đó.
+            ════ CHUNG ════
+            - confidence: 0.0–1.0, phản ánh độ chắc chắn đọc dòng.
+            - rawLine: ghi nguyên văn ký tự đọc được từ dòng đó.
             - Giữ đúng thứ tự dòng từ trên xuống dưới.
-            - rawLine: ghi nguyên văn ký tự đọc được từ dòng đó trong ảnh.
             """;
     }
 

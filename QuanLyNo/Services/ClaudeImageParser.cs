@@ -113,41 +113,8 @@ public class ClaudeImageParser
             _ => MediaType.ImageJpeg
         };
 
-    private static string BuildPrompt(string importType)
-    {
-        var isTraNo = importType == "TraNoHomNay";
-        var task = isTraNo
-            ? "ảnh trả nợ hôm nay: đọc tên khách hàng và số tiền trả"
-            : "ảnh nhập nợ mới: đọc tên khách mua và số kg từng lần mua";
-
-        var soLuongRule = isTraNo
-            ? "- soLuongAnh: luôn null (ảnh trả nợ không có cột kg)."
-            : "- soLuongAnh: số kg/số lượng trên dòng đó, dùng dấu chấm thập phân.";
-
-        var soTienRule = isTraNo
-            ? "- soTienTra: số tiền trả của dòng đó."
-            : "- soTienTra: luôn null (ảnh nhập nợ không có cột tiền).";
-
-        var schema = "{\"rawText\":\"toàn bộ chữ/số đọc được\",\"rows\":[{\"imageOrder\":1,\"tenLai\":null,\"tenKhach\":\"tên khách\",\"soLuongAnh\":12.3,\"soTienTra\":null,\"confidence\":0.9,\"rawLine\":\"nguyên dòng\"}]}";
-
-        return $"""
-            Đọc dữ liệu từ ảnh sổ tay kế toán viết tay tiếng Việt.
-            Nhiệm vụ: {task}.
-
-            Chỉ trả về JSON hợp lệ, không markdown, theo schema:
-            {schema}
-
-            Quy tắc:
-            - tenKhach: tên người/khách đọc được trên dòng, giữ nguyên dấu tiếng Việt.
-            - tenLai: luôn null, trừ khi ảnh ghi rõ "Lái:" hoặc "lái:" trước tên.
-            - Bỏ ký hiệu tiền tố R, J, S, x, ×, u, δ, + đứng trước tên — không đưa vào tenKhach.
-            {soLuongRule}
-            {soTienRule}
-            - confidence: 0.0–1.0, phản ánh độ chắc chắn khi đọc dòng đó.
-            - Giữ thứ tự dòng từ trên xuống dưới.
-            - Dòng không đọc được hoặc không chắc: để null và confidence thấp, không tự đoán.
-            """;
-    }
+    private static string BuildPrompt(string importType) =>
+        GeminiImageParser.BuildPrompt(importType);
 
     private static string CleanJson(string text)
     {
