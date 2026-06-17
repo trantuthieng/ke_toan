@@ -1246,4 +1246,312 @@ document.addEventListener('DOMContentLoaded', function () {
             alert('Lỗi kết nối: ' + err);
         });
     }
+
+    // ===== DUAL PANEL: So sánh & hoàn thiện 2 nguồn =====
+    (function () {
+        var dp = { excelRows: [], imageRows: [], matches: [] };
+
+        function dpLoai() { var e = document.getElementById('dpLoai'); return e ? e.value : 'NhapNoMoi'; }
+        function dpNguon() { var e = document.getElementById('dpNguon'); return e ? e.value : 'BH1'; }
+        function dpNgay() {
+            var e = document.querySelector('input[name="ngay"]');
+            return e ? e.value : new Date().toISOString().slice(0, 10);
+        }
+
+        var btnSave = document.getElementById('dpBtnSave');
+        if (!btnSave) return;
+
+        document.getElementById('dpExcelFile').addEventListener('change', function () {
+            if (this.files && this.files[0]) dpUploadExcel(this.files[0]);
+            this.value = '';
+        });
+        document.getElementById('dpImageFiles').addEventListener('change', function () {
+            if (this.files && this.files.length) dpUploadImages(Array.from(this.files));
+            this.value = '';
+        });
+        document.getElementById('dpExcelReset').addEventListener('click', function () {
+            dp.excelRows = []; dp.matches = [];
+            dpPlaceholder('dpExcelTable', 'primary', 'bi-file-earmark-excel', 'Upload file Excel để bắt đầu');
+            document.getElementById('dpExcelCount').textContent = '0 dòng';
+            dpMsg('dpExcelMsg', '', ''); dpHideSummary(); dpUpdateSave();
+        });
+        document.getElementById('dpImageReset').addEventListener('click', function () {
+            dp.imageRows = []; dp.matches = [];
+            dpPlaceholder('dpImageTable', 'success', 'bi-camera', 'Upload ảnh sổ tay (hỗ trợ nhiều ảnh)');
+            document.getElementById('dpImageCount').textContent = '0 dòng';
+            dpMsg('dpImageMsg', '', ''); dpHideSummary(); dpUpdateSave();
+        });
+        document.getElementById('dpBtnReset').addEventListener('click', function () {
+            dp.excelRows = []; dp.imageRows = []; dp.matches = [];
+            dpPlaceholder('dpExcelTable', 'primary', 'bi-file-earmark-excel', 'Upload file Excel để bắt đầu');
+            dpPlaceholder('dpImageTable', 'success', 'bi-camera', 'Upload ảnh sổ tay (hỗ trợ nhiều ảnh)');
+            document.getElementById('dpExcelCount').textContent = '0 dòng';
+            document.getElementById('dpImageCount').textContent = '0 dòng';
+            dpMsg('dpExcelMsg', '', ''); dpMsg('dpImageMsg', '', ''); dpMsg('dpSaveMsg', '', '');
+            dpHideSummary(); dpUpdateSave();
+            var b = document.getElementById('dpBtnSave');
+            b.className = 'btn btn-sm btn-success'; b.innerHTML = '<i class="bi bi-check-circle"></i> Xác nhận &amp; Lưu';
+        });
+        btnSave.addEventListener('click', dpSave);
+        document.getElementById('dpLoai').addEventListener('change', function () {
+            if (dp.excelRows.length || dp.imageRows.length) dpRunCompare();
+        });
+
+        // ---- Fuzzy matching ----
+        function dpNorm(s) {
+            if (!s) return '';
+            return s.trim().toLowerCase().replace(/đ/g, 'd').replace(/Đ/g, 'd')
+                .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+        }
+        function dpLev(a, b) {
+            var prev = Array.from({ length: b.length + 1 }, function (_, j) { return j; });
+            for (var i = 1; i <= a.length; i++) {
+                var cur = [i];
+                for (var j = 1; j <= b.length; j++)
+                    cur[j] = a[i-1] === b[j-1] ? prev[j-1] : 1 + Math.min(prev[j], cur[j-1], prev[j-1]);
+                prev = cur;
+            }
+            return prev[b.length];
+        }
+        function dpSim(a, b) {
+            var na = dpNorm(a), nb = dpNorm(b);
+            if (!na || !nb) return 0;
+            if (na === nb) return 1;
+            if (na.includes(nb) || nb.includes(na)) return 0.85;
+            var d = dpLev(na, nb);
+            return 1 - d / Math.max(na.length, nb.length);
+        }
+        function dpMatch(excelRows, imageRows) {
+            var matches = excelRows.map(function (_, ei) { return { excelIdx: ei, imageIdx: -1, sim: 0 }; });
+            var used = new Set();
+            excelRows.forEach(function (er, ei) {
+                var best = -1, bestSim = 0;
+                imageRows.forEach(function (ir, ii) {
+                    if (used.has(ii)) return;
+                    var s = dpSim(er.tenKhach, ir.tenKhach);
+                    if (s > bestSim) { bestSim = s; best = ii; }
+                });
+                if (best >= 0 && bestSim >= 0.45) { matches[ei] = { excelIdx: ei, imageIdx: best, sim: bestSim }; used.add(best); }
+            });
+            return matches;
+        }
+
+        // ---- Upload Excel ----
+        function dpUploadExcel(file) {
+            dpMsg('dpExcelMsg', 'info', '<span class="spinner-border spinner-border-sm me-1"></span>Đang đọc Excel...');
+            var fd = new FormData();
+            fd.append('file', file); fd.append('ngay', dpNgay()); fd.append('loai', dpLoai());
+            fetch('/Home/ParseExcelPreview', { method: 'POST', body: fd })
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                    if (d.ok) {
+                        dp.excelRows = d.rows || [];
+                        document.getElementById('dpExcelCount').textContent = dp.excelRows.length + ' dòng';
+                        dpMsg('dpExcelMsg', dp.excelRows.length ? 'success' : 'warning',
+                            dp.excelRows.length ? 'Đọc được ' + dp.excelRows.length + ' dòng.' : 'Không đọc được dòng nào.');
+                        dpRunCompare();
+                    } else {
+                        dpMsg('dpExcelMsg', 'danger', 'Lỗi: ' + (d.error || 'Không xác định'));
+                    }
+                }).catch(function (e) { dpMsg('dpExcelMsg', 'danger', 'Lỗi: ' + e.message); });
+        }
+
+        // ---- Upload Images (one by one) ----
+        async function dpUploadImages(files) {
+            dp.imageRows = [];
+            for (var i = 0; i < files.length; i++) {
+                dpMsg('dpImageMsg', 'info',
+                    '<span class="spinner-border spinner-border-sm me-1"></span>OCR ảnh ' + (i + 1) + '/' + files.length + '...');
+                var fd = new FormData();
+                fd.append('file', files[i]); fd.append('loai', dpLoai());
+                try {
+                    var r = await fetch('/Home/ParseImagePreview', { method: 'POST', body: fd });
+                    var d = await r.json();
+                    if (d.ok && d.rows) dp.imageRows = dp.imageRows.concat(d.rows);
+                    if (!d.ok && d.error) dpMsg('dpImageMsg', 'warning', 'Ảnh ' + files[i].name + ': ' + d.error);
+                } catch (e) { dpMsg('dpImageMsg', 'warning', 'Lỗi ảnh ' + files[i].name + ': ' + e.message); }
+            }
+            document.getElementById('dpImageCount').textContent = dp.imageRows.length + ' dòng';
+            dpMsg('dpImageMsg', dp.imageRows.length ? 'success' : 'warning',
+                dp.imageRows.length
+                    ? 'Đọc được ' + dp.imageRows.length + ' dòng từ ' + files.length + ' ảnh.'
+                    : 'Không đọc được dòng nào.');
+            dpRunCompare();
+        }
+
+        // ---- Compare & render ----
+        function dpRunCompare() {
+            dp.matches = dpMatch(dp.excelRows, dp.imageRows);
+            dpRenderExcel();
+            dpRenderImage();
+            dpRenderSummary();
+            dpUpdateSave();
+        }
+
+        function dpRenderExcel() {
+            var el = document.getElementById('dpExcelTable');
+            if (!el) return;
+            if (!dp.excelRows.length) { dpPlaceholder('dpExcelTable', 'primary', 'bi-file-earmark-excel', 'Upload file Excel để bắt đầu'); return; }
+            var isT = dpLoai() === 'TraNoHomNay';
+            var h = '<table class="table table-sm table-bordered mb-0" style="font-size:.84rem">';
+            h += '<thead class="table-primary" style="position:sticky;top:0;z-index:1"><tr>';
+            h += '<th style="width:28px">#</th>';
+            if (!isT) h += '<th>Lái</th>';
+            h += '<th>Khách mua</th>';
+            if (!isT) { h += '<th style="width:72px">SL(kg)</th><th style="width:72px">Giá</th><th style="width:88px">T.Tiền</th>'; }
+            else { h += '<th style="width:110px">Số tiền trả</th>'; }
+            h += '<th style="width:88px">Trạng thái</th></tr></thead><tbody>';
+
+            dp.excelRows.forEach(function (row, i) {
+                var m = dp.matches[i] || { excelIdx: i, imageIdx: -1, sim: 0 };
+                var ir = m.imageIdx >= 0 ? dp.imageRows[m.imageIdx] : null;
+                var diff = ir && (isT
+                    ? Math.abs((+row.soTienTra || 0) - (+ir.soTienTra || 0)) > 1000
+                    : Math.abs((+row.soLuong || 0) - (+ir.soLuongAnh || 0)) > 0.1);
+                var trCls = ir ? (diff ? 'table-warning' : '') : 'table-light';
+                var badge = ir
+                    ? (diff ? '<span class="badge bg-warning text-dark">⚠ Lệch</span>' : '<span class="badge bg-success">✓ Khớp</span>')
+                    : '<span class="badge bg-secondary">Chưa khớp</span>';
+                var peer = ir ? '<br><small class="text-muted">↔ ảnh #' + (m.imageIdx + 1) + '</small>' : '';
+                var slV = (diff && ir && !isT && ir.soLuongAnh != null) ? ir.soLuongAnh : (row.soLuong || '');
+                var tvV = (diff && ir && isT && ir.soTienTra != null) ? ir.soTienTra : (row.soTienTra || '');
+
+                h += '<tr class="' + trCls + '">';
+                h += '<td class="text-muted small align-middle">' + (i + 1) + '</td>';
+                if (!isT) h += '<td><input class="form-control form-control-sm dp-ex" data-idx="' + i + '" data-f="tenLai" value="' + dpEsc(row.tenLai || '') + '"></td>';
+                h += '<td><input class="form-control form-control-sm dp-ex" data-idx="' + i + '" data-f="tenKhach" value="' + dpEsc(row.tenKhach || '') + '"></td>';
+                if (!isT) {
+                    h += '<td><input type="number" step="0.1" class="form-control form-control-sm dp-ex' + (diff ? ' border-danger border-2' : '') + '" data-idx="' + i + '" data-f="soLuong" value="' + slV + '"></td>';
+                    h += '<td><input type="number" class="form-control form-control-sm dp-ex" data-idx="' + i + '" data-f="gia" value="' + (row.gia || '') + '"></td>';
+                    h += '<td><input type="number" class="form-control form-control-sm dp-ex" data-idx="' + i + '" data-f="thanhTien" value="' + (row.thanhTien || '') + '"></td>';
+                } else {
+                    h += '<td><input type="number" class="form-control form-control-sm dp-ex' + (diff ? ' border-danger border-2' : '') + '" data-idx="' + i + '" data-f="soTienTra" value="' + tvV + '"></td>';
+                }
+                h += '<td class="align-middle small">' + badge + peer + '</td></tr>';
+            });
+            h += '</tbody></table>';
+            el.innerHTML = h;
+            el.querySelectorAll('.dp-ex').forEach(function (inp) {
+                inp.addEventListener('change', function () {
+                    var idx = +this.dataset.idx;
+                    if (dp.excelRows[idx]) dp.excelRows[idx][this.dataset.f] = this.value;
+                });
+            });
+        }
+
+        function dpRenderImage() {
+            var el = document.getElementById('dpImageTable');
+            if (!el) return;
+            if (!dp.imageRows.length) { dpPlaceholder('dpImageTable', 'success', 'bi-camera', 'Upload ảnh sổ tay (hỗ trợ nhiều ảnh)'); return; }
+            var isT = dpLoai() === 'TraNoHomNay';
+            var rev = {};
+            dp.matches.forEach(function (m) { if (m.imageIdx >= 0) rev[m.imageIdx] = m.excelIdx; });
+
+            var h = '<table class="table table-sm table-bordered mb-0" style="font-size:.84rem">';
+            h += '<thead class="table-success" style="position:sticky;top:0;z-index:1"><tr>';
+            h += '<th style="width:28px">#</th><th style="width:50px">Conf</th><th>Tên khách (OCR)</th>';
+            h += '<th style="width:' + (isT ? 100 : 72) + 'px">' + (isT ? 'Số tiền' : 'SL ảnh') + '</th>';
+            h += '<th style="width:68px">Khớp</th></tr></thead><tbody>';
+
+            dp.imageRows.forEach(function (ir, i) {
+                var exIdx = rev.hasOwnProperty(i) ? rev[i] : -1;
+                var conf = +(ir.confidence || 0);
+                var cBg = conf >= 0.85 ? 'bg-success' : conf >= 0.7 ? 'bg-warning text-dark' : 'bg-danger';
+                var amt = isT
+                    ? (ir.soTienTra != null ? Math.round(+ir.soTienTra).toLocaleString('vi-VN') + 'đ' : '—')
+                    : (ir.soLuongAnh != null ? ir.soLuongAnh + ' kg' : '—');
+                var mBadge = exIdx >= 0
+                    ? '<span class="badge bg-primary">Excel #' + (exIdx + 1) + '</span>'
+                    : '<span class="badge bg-info text-dark">Chưa</span>';
+
+                h += '<tr class="' + (exIdx < 0 ? 'table-info' : '') + '">';
+                h += '<td class="text-muted small align-middle">' + (i + 1) + '</td>';
+                h += '<td><span class="badge ' + cBg + '">' + Math.round(conf * 100) + '%</span></td>';
+                h += '<td class="align-middle">' + dpEsc(ir.tenKhach || '—');
+                if (ir.tenLai) h += '<br><small class="text-muted">Lái: ' + dpEsc(ir.tenLai) + '</small>';
+                h += '</td><td class="align-middle text-end">' + amt + '</td>';
+                h += '<td class="align-middle">' + mBadge + '</td></tr>';
+            });
+            h += '</tbody></table>';
+            el.innerHTML = h;
+        }
+
+        function dpRenderSummary() {
+            var isT = dpLoai() === 'TraNoHomNay';
+            var usedImg = new Set(dp.matches.filter(function (m) { return m.imageIdx >= 0; }).map(function (m) { return m.imageIdx; }));
+            var nOk = 0, nDiff = 0, nExOnly = 0, nImOnly = 0;
+            dp.matches.forEach(function (m, i) {
+                if (m.imageIdx < 0) { nExOnly++; return; }
+                var ir = dp.imageRows[m.imageIdx], er = dp.excelRows[i];
+                var d = isT
+                    ? Math.abs((+er.soTienTra || 0) - (+ir.soTienTra || 0)) > 1000
+                    : Math.abs((+er.soLuong || 0) - (+ir.soLuongAnh || 0)) > 0.1;
+                d ? nDiff++ : nOk++;
+            });
+            dp.imageRows.forEach(function (_, i) { if (!usedImg.has(i)) nImOnly++; });
+            document.getElementById('dpSumMatched').textContent = nOk + ' khớp';
+            document.getElementById('dpSumDiff').textContent = nDiff + ' lệch';
+            document.getElementById('dpSumExcelOnly').textContent = nExOnly + ' chỉ Excel';
+            document.getElementById('dpSumImageOnly').textContent = nImOnly + ' chỉ Ảnh';
+            document.getElementById('dpSummaryBar').classList.remove('d-none');
+        }
+
+        function dpUpdateSave() {
+            var b = document.getElementById('dpBtnSave');
+            if (b) b.disabled = !dp.excelRows.length;
+        }
+
+        // ---- Save ----
+        function dpSave() {
+            var isT = dpLoai() === 'TraNoHomNay';
+            var rows = dp.excelRows.map(function (row, i) {
+                var r = Object.assign({}, row);
+                document.querySelectorAll('.dp-ex[data-idx="' + i + '"]').forEach(function (inp) { r[inp.dataset.f] = inp.value; });
+                return {
+                    tenLai: r.tenLai || null, tenKhach: r.tenKhach || null,
+                    soCon: +(r.soCon) || 0, soLuong: +(r.soLuong) || 0,
+                    soLuongAnh: r.soLuongAnh != null ? +(r.soLuongAnh) : null,
+                    gia: +(r.gia) || 0, thanhTien: +(r.thanhTien) || 0,
+                    tienTraLai: +(r.tienTraLai) || 0, soTienTra: +(r.soTienTra) || 0
+                };
+            });
+            var b = document.getElementById('dpBtnSave');
+            var orig = b.innerHTML;
+            b.disabled = true;
+            b.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Đang lưu...';
+            fetch('/Home/SaveDualPanelResult', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ngay: dpNgay(), loai: dpLoai(), nguonBanHang: dpNguon(), rows: rows })
+            }).then(function (r) { return r.json(); })
+            .then(function (d) {
+                if (d.ok) {
+                    dpMsg('dpSaveMsg', 'success', '✓ Đã lưu ' + d.saved + ' dòng vào DB!');
+                    b.innerHTML = '<i class="bi bi-check-circle-fill"></i> Đã lưu';
+                    b.className = 'btn btn-sm btn-outline-success';
+                } else {
+                    dpMsg('dpSaveMsg', 'danger', 'Lỗi: ' + (d.error || 'Không xác định'));
+                    b.disabled = false; b.innerHTML = orig;
+                }
+            }).catch(function (e) {
+                dpMsg('dpSaveMsg', 'danger', 'Lỗi kết nối: ' + e.message);
+                b.disabled = false; b.innerHTML = orig;
+            });
+        }
+
+        // ---- Helpers ----
+        function dpMsg(id, type, text) {
+            var el = document.getElementById(id); if (!el) return;
+            if (!text) { el.className = 'px-3 py-1 small d-none'; el.innerHTML = ''; return; }
+            var c = { info: 'text-primary', success: 'text-success', warning: 'text-warning', danger: 'text-danger' };
+            el.className = 'px-3 py-1 small ' + (c[type] || '');
+            el.innerHTML = text;
+        }
+        function dpPlaceholder(id, color, icon, text) {
+            var el = document.getElementById(id);
+            if (el) el.innerHTML = '<div class="p-4 text-center text-muted"><i class="bi ' + icon + ' fs-1 d-block text-' + color + ' opacity-25 mb-2"></i>' + text + '</div>';
+        }
+        function dpHideSummary() { var e = document.getElementById('dpSummaryBar'); if (e) e.classList.add('d-none'); }
+        function dpEsc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+    })();
 });

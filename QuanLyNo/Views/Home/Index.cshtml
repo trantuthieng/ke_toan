@@ -497,137 +497,91 @@
         }
     </div>
 
-    <!-- TAB 4: HOÀN THIỆN DỮ LIỆU (Upload ảnh + điền tên khách mua) -->
+    <!-- TAB 4: HOÀN THIỆN DỮ LIỆU -->
     <div class="tab-pane fade" id="tab-hoan-thien">
-        <h5 class="mb-3">
-            <i class="bi bi-images"></i> Hoàn thiện dữ liệu từ ảnh - @today.ToString("dd/MM/yyyy")
-        </h5>
 
-        <!-- Upload ảnh -->
-        <div class="card mb-3">
-            <div class="card-header bg-info text-white">
-                <i class="bi bi-cloud-upload"></i> Upload ảnh chụp (sổ ghi tay)
-            </div>
-            <div class="card-body">
-                <form asp-action="ImportImageBatch" method="post" enctype="multipart/form-data" class="row g-2 align-items-end excel-grid" id="imageImportForm">
-                    <input type="hidden" name="ngay" value="@today.ToString("yyyy-MM-dd")" />
-                    <div class="col-md-3">
-                        <label class="form-label small">Loại ảnh</label>
-                        <select name="loaiImport" id="imageLoaiImport" class="form-select form-select-sm">
-                            <option value="NhapNoMoi">Nhập nợ mới</option>
-                            <option value="TraNoHomNay">Trả nợ hôm nay</option>
-                        </select>
-                    </div>
-                    <div class="col-md-3">
-                        <label class="form-label small">Nguồn</label>
-                        <select name="nguonBanHang" id="imageNguonBanHang" class="form-select form-select-sm">
-                            <option value="BH1">Bán hàng 1</option>
-                            <option value="BH2">Bán hàng 2</option>
-                        </select>
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label small">Ảnh</label>
-                        <input type="file" name="files" id="imageFiles" class="form-control" accept="image/*" multiple required />
-                    </div>
-                    <div class="col-md-2">
-                        <button type="submit" class="btn btn-info text-white w-100" id="btnImportImageBatch">
-                            <i class="bi bi-upload"></i> Upload
-                        </button>
-                    </div>
-                    <div class="col-12">
-                        <div class="small text-muted d-none" id="imageImportStatus"></div>
-                    </div>
-                </form>
-            </div>
-        </div>
-
-        <!-- Layout 2 cột: ảnh bên trái, bảng dữ liệu bên phải -->
-        <div class="row">
-            <!-- Cột ảnh -->
-            <div class="col-md-5">
-                <div class="card">
-                    <div class="card-header bg-secondary text-white d-flex justify-content-between align-items-center">
-                        <span><i class="bi bi-image"></i> Ảnh đã upload</span>
-                        <button class="btn btn-sm btn-outline-light" id="btnRefreshImages">
-                            <i class="bi bi-arrow-clockwise"></i>
-                        </button>
-                    </div>
-                    <div class="card-body p-2" id="imageGallery" style="max-height: 600px; overflow-y: auto;">
-                        <p class="text-muted text-center">Đang tải ảnh...</p>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Cột bảng dữ liệu cần hoàn thiện -->
-            <div class="col-md-7">
-                <div class="card">
-                    <div class="card-header bg-warning d-flex justify-content-between align-items-center">
-                        <span><i class="bi bi-pencil-square"></i> Review/đối soát dữ liệu ảnh</span>
-                        <div class="d-flex gap-1">
-                            <button class="btn btn-sm btn-outline-dark" id="btnRefreshImageReview" type="button">
-                                <i class="bi bi-arrow-clockwise"></i>
-                            </button>
-                            <button class="btn btn-sm btn-success" id="btnApplyImageReview" type="button">
-                                <i class="bi bi-check2-square"></i> Áp dụng review
-                            </button>
-                            <button class="btn btn-sm btn-primary" id="btnSaveKhachMua" type="button">
-                                <i class="bi bi-check-all"></i> Lưu tên
-                            </button>
-                        </div>
-                    </div>
-                    <div class="card-body p-2" style="max-height: 600px; overflow-y: auto;">
-                        <div id="imageImportReview" class="mb-3">
-                            <p class="text-muted text-center p-3">Đang chờ dữ liệu review ảnh...</p>
-                        </div>
-                        <div id="incompleteRecords">
-                            <p class="text-muted text-center">Đang tải dữ liệu...</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- SO SÁNH 2 NGUỒN DỮ LIỆU -->
-        <div class="card mt-3">
-            <div class="card-header d-flex justify-content-between align-items-center" style="background:#6f42c1;color:#fff;">
-                <span><i class="bi bi-arrow-left-right"></i> So sánh 2 nguồn dữ liệu (Excel vs Ảnh OCR)</span>
-                <button class="btn btn-sm btn-outline-light" type="button"
-                        data-bs-toggle="collapse" data-bs-target="#comparePanel">
-                    <i class="bi bi-chevron-down"></i>
+        <!-- Header controls -->
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+            <span class="fw-semibold"><i class="bi bi-arrow-left-right"></i> So sánh &amp; hoàn thiện - @today.ToString("dd/MM/yyyy")</span>
+            <select id="dpLoai" class="form-select form-select-sm" style="width:160px">
+                <option value="NhapNoMoi">Nhập nợ mới</option>
+                <option value="TraNoHomNay">Trả nợ hôm nay</option>
+            </select>
+            <select id="dpNguon" class="form-select form-select-sm" style="width:140px">
+                <option value="BH1">Bán hàng 1</option>
+                <option value="BH2">Bán hàng 2</option>
+            </select>
+            <div class="ms-auto d-flex gap-2 align-items-center">
+                <span id="dpSaveMsg" class="small d-none"></span>
+                <button class="btn btn-sm btn-outline-secondary" id="dpBtnReset" type="button">
+                    <i class="bi bi-arrow-counterclockwise"></i> Reset
+                </button>
+                <button class="btn btn-sm btn-success" id="dpBtnSave" type="button" disabled>
+                    <i class="bi bi-check-circle"></i> Xác nhận &amp; Lưu
                 </button>
             </div>
-            <div class="collapse" id="comparePanel">
-                <div class="card-body">
-                    <div class="row g-2 align-items-end mb-3">
-                        <div class="col-md-3">
-                            <label class="form-label small">Loại</label>
-                            <select id="compareLoai" class="form-select form-select-sm">
-                                <option value="NhapNoMoi">Nhập nợ mới</option>
-                                <option value="TraNoHomNay">Trả nợ hôm nay</option>
-                            </select>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label small">Nguồn</label>
-                            <select id="compareNguon" class="form-select form-select-sm">
-                                <option value="">Tất cả</option>
-                                <option value="BH1">Bán hàng 1</option>
-                                <option value="BH2">Bán hàng 2</option>
-                            </select>
-                        </div>
-                        <div class="col-md-6 d-flex gap-2">
-                            <button class="btn btn-sm btn-outline-secondary" id="btnLoadCompare" type="button">
-                                <i class="bi bi-arrow-clockwise"></i> Tải dữ liệu
-                            </button>
-                            <button class="btn btn-sm btn-outline-primary" id="btnClaudeMatch" type="button" disabled>
-                                <i class="bi bi-cpu"></i> Claude khớp tên chưa chắc
+        </div>
+
+        <!-- 2 columns -->
+        <div class="row g-3">
+            <!-- LEFT: Excel (có thể sửa) -->
+            <div class="col-12 col-lg-6">
+                <div class="card border-primary h-100">
+                    <div class="card-header bg-primary text-white py-2 d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-file-earmark-excel"></i> Bên Excel <span class="badge bg-white text-primary ms-1" id="dpExcelCount">0 dòng</span></span>
+                        <div class="d-flex gap-1">
+                            <label class="btn btn-sm btn-outline-light mb-0" for="dpExcelFile">
+                                <i class="bi bi-upload"></i> Upload Excel
+                            </label>
+                            <input type="file" id="dpExcelFile" accept=".xlsx,.xls" class="d-none" />
+                            <button class="btn btn-sm btn-outline-light" id="dpExcelReset" type="button" title="Xóa dữ liệu Excel">
+                                <i class="bi bi-x-lg"></i>
                             </button>
                         </div>
                     </div>
-                    <div id="compareResult">
-                        <p class="text-muted text-center small">Nhấn "Tải dữ liệu" để so sánh Excel và ảnh OCR theo ngày đang xem.</p>
+                    <div id="dpExcelMsg" class="px-3 py-1 small d-none"></div>
+                    <div id="dpExcelTable" style="overflow-x:auto; max-height:540px; overflow-y:auto;">
+                        <div class="p-4 text-center text-muted">
+                            <i class="bi bi-file-earmark-excel fs-1 d-block text-primary opacity-25 mb-2"></i>
+                            Upload file Excel để bắt đầu
+                        </div>
                     </div>
                 </div>
             </div>
+
+            <!-- RIGHT: Image OCR (chuẩn) -->
+            <div class="col-12 col-lg-6">
+                <div class="card border-success h-100">
+                    <div class="card-header bg-success text-white py-2 d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-camera"></i> Bên Ảnh (chuẩn) <span class="badge bg-white text-success ms-1" id="dpImageCount">0 dòng</span></span>
+                        <div class="d-flex gap-1">
+                            <label class="btn btn-sm btn-outline-light mb-0" for="dpImageFiles">
+                                <i class="bi bi-upload"></i> Upload Ảnh
+                            </label>
+                            <input type="file" id="dpImageFiles" accept="image/*" multiple class="d-none" />
+                            <button class="btn btn-sm btn-outline-light" id="dpImageReset" type="button" title="Xóa dữ liệu ảnh">
+                                <i class="bi bi-x-lg"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="dpImageMsg" class="px-3 py-1 small d-none"></div>
+                    <div id="dpImageTable" style="overflow-x:auto; max-height:540px; overflow-y:auto;">
+                        <div class="p-4 text-center text-muted">
+                            <i class="bi bi-camera fs-1 d-block text-success opacity-25 mb-2"></i>
+                            Upload ảnh sổ tay (hỗ trợ nhiều ảnh)
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Summary bar -->
+        <div id="dpSummaryBar" class="d-none mt-3 p-2 rounded border small d-flex flex-wrap gap-2 align-items-center">
+            <strong>Kết quả so sánh:</strong>
+            <span id="dpSumMatched" class="badge bg-success">0 khớp</span>
+            <span id="dpSumDiff" class="badge bg-warning text-dark">0 lệch</span>
+            <span id="dpSumExcelOnly" class="badge bg-secondary">0 chỉ Excel</span>
+            <span id="dpSumImageOnly" class="badge bg-info text-dark">0 chỉ Ảnh</span>
         </div>
     </div>
 </div>

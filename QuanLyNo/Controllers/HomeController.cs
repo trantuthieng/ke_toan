@@ -1141,6 +1141,117 @@ public class HomeController : Controller
                     : 1 + Math.Min(dp[i - 1, j], Math.Min(dp[i, j - 1], dp[i - 1, j - 1]));
         return dp[a.Length, b.Length];
     }
+
+    // ===== DUAL PANEL =====
+
+    [HttpPost]
+    public async Task<IActionResult> ParseExcelPreview(IFormFile? file, string? ngay, string? loai)
+    {
+        if (file == null || file.Length == 0)
+            return Json(new { ok = false, error = "Chưa chọn file Excel." });
+        try
+        {
+            await using var stream = file.OpenReadStream();
+            var rows = _excel.ImportGiaoDichHangNgay(stream, ParseDateOrToday(ngay));
+            return Json(new
+            {
+                ok = true,
+                count = rows.Count,
+                rows = rows.Select((r, i) => new
+                {
+                    idx = i, tenLai = r.TenLai ?? "", tenKhach = r.TenKhach ?? "",
+                    soCon = r.SoCon, soLuong = r.SoLuong, gia = r.Gia,
+                    thanhTien = r.ThanhTien, tienTraLai = r.TienTraLai, ghiChu = r.GhiChu ?? ""
+                })
+            });
+        }
+        catch (Exception ex) { return Json(new { ok = false, error = "Lỗi đọc Excel: " + ex.Message }); }
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> ParseImagePreview(IFormFile? file, string? loai, CancellationToken ct)
+    {
+        if (file == null || file.Length == 0)
+            return Json(new { ok = false, error = "Chưa chọn ảnh." });
+
+        var loaiImport = string.IsNullOrEmpty(loai) ? ImageImportTypes.NhapNoMoi : loai;
+        var parser = new GeminiImageParser(_configuration);
+        var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+        var tmp = Path.Combine(Path.GetTempPath(), $"ocrp_{Guid.NewGuid()}{ext}");
+        try
+        {
+            await using (var fs = new FileStream(tmp, FileMode.Create))
+                await file.CopyToAsync(fs, ct);
+
+            var parsed = await parser.ParseAsync(tmp, file.ContentType, loaiImport, ct);
+            return Json(new
+            {
+                ok = true,
+                count = parsed.Rows?.Count ?? 0,
+                rows = parsed.Rows?.Select(r => new
+                {
+                    fileName = file.FileName, imageOrder = r.ImageOrder,
+                    tenLai = r.TenLai ?? "", tenKhach = r.TenKhach ?? "",
+                    soLuongAnh = r.SoLuongAnh, soTienTra = r.SoTienTra,
+                    confidence = r.Confidence, rawLine = r.RawLine ?? ""
+                }),
+                error = parsed.Error
+            });
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { return Json(new { ok = false, error = ex.Message }); }
+        finally { try { if (File.Exists(tmp)) File.Delete(tmp); } catch { } }
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> SaveDualPanelResult([FromBody] DualPanelSaveRequest request)
+    {
+        if (request.Rows == null || request.Rows.Count == 0)
+            return Json(new { ok = false, error = "Không có dữ liệu." });
+
+        var date = ParseDateOrToday(request.Ngay);
+        var isTraNo = string.Equals(request.Loai, ImageImportTypes.TraNoHomNay, StringComparison.OrdinalIgnoreCase);
+        var saved = 0;
+
+        foreach (var row in request.Rows)
+        {
+            if (isTraNo)
+            {
+                if (string.IsNullOrWhiteSpace(row.TenKhach) || (row.SoTienTra ?? 0) <= 0) continue;
+                _db.TraNos.Add(new TraNo
+                {
+                    NgayTra = date,
+                    TenKhach = row.TenKhach!.Trim(),
+                    TenLai = string.IsNullOrWhiteSpace(row.TenLai) ? null : row.TenLai.Trim(),
+                    SoTienTra = row.SoTienTra ?? 0,
+                    NguonBanHang = string.IsNullOrWhiteSpace(request.NguonBanHang) ? null : request.NguonBanHang,
+                    GhiChu = "Xác nhận từ so sánh 2 nguồn"
+                });
+            }
+            else
+            {
+                if ((row.SoLuong ?? 0) <= 0) continue;
+                _db.GiaoDichs.Add(new GiaoDich
+                {
+                    Ngay = date,
+                    TenLai = string.IsNullOrWhiteSpace(row.TenLai) ? "" : row.TenLai!.Trim(),
+                    TenKhach = string.IsNullOrWhiteSpace(row.TenKhach) ? "" : row.TenKhach!.Trim(),
+                    SoCon = row.SoCon ?? 0,
+                    SoLuong = row.SoLuong ?? 0,
+                    SoLuongAnh = row.SoLuongAnh,
+                    Gia = row.Gia ?? 0,
+                    ThanhTien = row.ThanhTien ?? 0,
+                    TienTraLai = row.TienTraLai ?? 0,
+                    NguonBanHang = string.IsNullOrWhiteSpace(request.NguonBanHang) ? null : request.NguonBanHang,
+                    GhiChu = "Xác nhận từ so sánh 2 nguồn"
+                });
+            }
+            saved++;
+        }
+
+        try { await _db.SaveChangesAsync(); return Json(new { ok = true, saved }); }
+        catch (Exception ex) { return Json(new { ok = false, error = ex.Message }); }
+    }
 }
 
 public class CapNhatKhachRequest
@@ -1207,4 +1318,25 @@ public class ClaudeMatchResult
     public int ExcelIndex { get; set; }
     public double Confidence { get; set; }
     public string? Reason { get; set; }
+}
+
+public class DualPanelSaveRequest
+{
+    public string? Ngay { get; set; }
+    public string? Loai { get; set; }
+    public string? NguonBanHang { get; set; }
+    public List<DualPanelSaveRow> Rows { get; set; } = new();
+}
+
+public class DualPanelSaveRow
+{
+    public string? TenLai { get; set; }
+    public string? TenKhach { get; set; }
+    public decimal? SoCon { get; set; }
+    public decimal? SoLuong { get; set; }
+    public decimal? SoLuongAnh { get; set; }
+    public decimal? Gia { get; set; }
+    public decimal? ThanhTien { get; set; }
+    public decimal? TienTraLai { get; set; }
+    public decimal? SoTienTra { get; set; }
 }
