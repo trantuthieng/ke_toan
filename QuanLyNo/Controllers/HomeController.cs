@@ -1148,9 +1148,14 @@ public class HomeController : Controller
     {
         if (file == null || file.Length == 0)
             return Json(new { ok = false, error = "Chưa chọn file Excel." });
+        const long maxBytes = 8 * 1024 * 1024;
+        if (file.Length > maxBytes)
+            return Json(new { ok = false, error = $"File quá lớn ({file.Length / 1024 / 1024} MB). Giới hạn 8 MB." });
         try
         {
-            await using var stream = file.OpenReadStream();
+            using var stream = new MemoryStream();
+            await file.CopyToAsync(stream);
+            stream.Position = 0;
             var rows = _excel.ImportGiaoDichHangNgay(stream, ParseDateOrToday(ngay));
             return Json(new
             {
