@@ -1,6 +1,5 @@
 using ClosedXML.Excel;
 using ExcelDataReader;
-using System.Data;
 using System.Globalization;
 using QuanLyNo.Models;
 using QuanLyNo.ViewModels;
@@ -11,48 +10,56 @@ public class ExcelService
 {
     // ── HELPERS ──────────────────────────────────────────────────
 
-    private static DataTable LoadFirstSheet(Stream stream)
+    // Reads only the FIRST sheet, row by row, into a plain list of arrays.
+    // Does NOT call AsDataSet() — that would load ALL sheets into memory.
+    private static List<object?[]> ReadRows(Stream stream)
     {
         System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
         using var reader = ExcelReaderFactory.CreateReader(stream);
-        var ds = reader.AsDataSet(new ExcelDataSetConfiguration
+        var rows = new List<object?[]>();
+        while (reader.Read()) // iterate rows of first sheet only
         {
-            ConfigureDataTable = _ => new ExcelDataTableConfiguration { UseHeaderRow = false }
-        });
-        return ds.Tables.Count > 0 ? ds.Tables[0] : new DataTable();
+            var row = new object?[reader.FieldCount];
+            for (int i = 0; i < reader.FieldCount; i++)
+                row[i] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+            rows.Add(row);
+        }
+        // NOT calling reader.NextResult() → subsequent sheets are never loaded
+        return rows;
     }
 
     // col is 1-based (Excel convention)
-    private static string GetStr(DataRow row, int col)
+    private static string GetStr(object?[] row, int col)
     {
         int i = col - 1;
-        return i < row.Table.Columns.Count ? row[i]?.ToString()?.Trim() ?? "" : "";
+        return i < row.Length ? row[i]?.ToString()?.Trim() ?? "" : "";
     }
 
-    private static decimal GetDec(DataRow row, int col)
+    private static decimal GetDec(object?[] row, int col)
     {
         int i = col - 1;
-        if (i >= row.Table.Columns.Count) return 0;
+        if (i >= row.Length) return 0;
         var v = row[i];
-        if (v == null || v == DBNull.Value) return 0;
+        if (v == null) return 0;
         if (v is double d) return (decimal)d;
         if (v is decimal dec) return dec;
+        if (v is int ii) return ii;
+        if (v is long l) return l;
         return decimal.TryParse(v.ToString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var r) ? r : 0;
     }
 
     // ── DETECT ───────────────────────────────────────────────────
 
-    private static string DetectFileType(DataTable dt)
+    private static string DetectFileType(List<object?[]> rows)
     {
-        var r1 = dt.Rows.Count > 0 ? dt.Rows[0][0]?.ToString() ?? "" : "";
+        var r1 = rows.Count > 0 ? rows[0][0]?.ToString() ?? "" : "";
         if (r1.Contains("BÁO CÁO", StringComparison.OrdinalIgnoreCase) ||
             r1.Contains("CÔNG NỢ", StringComparison.OrdinalIgnoreCase))
             return "baocao";
 
-        if (dt.Rows.Count > 2)
+        if (rows.Count > 2)
         {
-            var row3 = dt.Rows[2];
-            int nonEmpty = row3.ItemArray.Count(v => v != null && v != DBNull.Value && !string.IsNullOrWhiteSpace(v.ToString()));
+            int nonEmpty = rows[2].Count(v => v != null && !string.IsNullOrWhiteSpace(v.ToString()));
             if (nonEmpty >= 10) return "baocao";
         }
 
@@ -66,47 +73,45 @@ public class ExcelService
             List<KhachHang> khachHangs,
             List<TraNo> traNos) DetectAndImport(Stream stream, DateTime ngay)
     {
-        var dt = LoadFirstSheet(stream);
-        var fileType = DetectFileType(dt);
+        var rows = ReadRows(stream);
+        var fileType = DetectFileType(rows);
 
         if (fileType == "baocao")
         {
-            var (khs, gds, tns) = ImportBaoCaoFromTable(dt);
+            var (khs, gds, tns) = ImportBaoCao(rows);
             return (fileType, gds, khs, tns);
         }
         else
         {
-            var gds = ImportGiaoDichFromTable(dt, ngay);
+            var gds = ImportGiaoDich(rows, ngay);
             return (fileType, gds, new List<KhachHang>(), new List<TraNo>());
         }
     }
 
     public List<GiaoDich> ImportGiaoDichHangNgay(Stream stream, DateTime ngay)
     {
-        var dt = LoadFirstSheet(stream);
-        return ImportGiaoDichFromTable(dt, ngay);
+        return ImportGiaoDich(ReadRows(stream), ngay);
     }
 
     public (List<KhachHang> khachHangs, List<GiaoDich> giaoDichs, List<TraNo> traNos) ImportBaoCao(Stream stream)
     {
-        var dt = LoadFirstSheet(stream);
-        return ImportBaoCaoFromTable(dt);
+        return ImportBaoCao(ReadRows(stream));
     }
 
     // ── PRIVATE IMPORT ───────────────────────────────────────────
 
-    private List<GiaoDich> ImportGiaoDichFromTable(DataTable dt, DateTime ngay)
+    private List<GiaoDich> ImportGiaoDich(List<object?[]> rows, DateTime ngay)
     {
-        if (IsKhachHangLaiFormat(dt))
-            return ImportKhachHangLaiFormat(dt, ngay);
+        if (IsKhachHangLaiFormat(rows))
+            return ImportKhachHangLaiFormat(rows, ngay);
 
         var allItems = new List<GiaoDich>();
         string currentLai = "";
         var group = new List<GiaoDich>();
 
-        for (int r = 2; r < dt.Rows.Count; r++) // data from row 3 (index 2)
+        for (int r = 2; r < rows.Count; r++) // data from row 3 (index 2)
         {
-            var row = dt.Rows[r];
+            var row = rows[r];
 
             if (GetDec(row, 2) == 0 && GetDec(row, 3) == 0 && GetDec(row, 5) == 0
                 && string.IsNullOrWhiteSpace(GetStr(row, 1)))
@@ -147,14 +152,14 @@ public class ExcelService
         return allItems;
     }
 
-    private bool IsKhachHangLaiFormat(DataTable dt)
+    private bool IsKhachHangLaiFormat(List<object?[]> rows)
     {
-        int limit = Math.Min(dt.Rows.Count, 82); // rows 3–80 → indices 2–81
+        int limit = Math.Min(rows.Count, 82);
         int dataRows = 0, namedDataRows = 0;
 
         for (int r = 2; r < limit; r++)
         {
-            var row = dt.Rows[r];
+            var row = rows[r];
             if (GetDec(row, 5) == 0) continue;
             dataRows++;
             if (!string.IsNullOrWhiteSpace(GetStr(row, 1))) namedDataRows++;
@@ -163,27 +168,27 @@ public class ExcelService
         return dataRows >= 5 && namedDataRows >= dataRows * 0.8m;
     }
 
-    private bool FirstDataRowIsSeller(DataTable dt)
+    private bool FirstDataRowIsSeller(List<object?[]> rows)
     {
-        for (int r = 2; r < dt.Rows.Count; r++)
+        for (int r = 2; r < rows.Count; r++)
         {
-            var row = dt.Rows[r];
+            var row = rows[r];
             if (string.IsNullOrWhiteSpace(GetStr(row, 1))) continue;
             return GetDec(row, 5) == 0 && GetDec(row, 3) == 0 && GetDec(row, 4) == 0;
         }
         return false;
     }
 
-    private List<GiaoDich> ImportKhachHangLaiFormat(DataTable dt, DateTime ngay)
+    private List<GiaoDich> ImportKhachHangLaiFormat(List<object?[]> rows, DateTime ngay)
     {
         var result = new List<GiaoDich>();
         var pending = new List<GiaoDich>();
         var currentLai = "";
-        var sellerFirst = FirstDataRowIsSeller(dt);
+        var sellerFirst = FirstDataRowIsSeller(rows);
 
-        for (int r = 2; r < dt.Rows.Count; r++)
+        for (int r = 2; r < rows.Count; r++)
         {
-            var row = dt.Rows[r];
+            var row = rows[r];
             var ten = GetStr(row, 1);
             if (string.IsNullOrWhiteSpace(ten)) continue;
 
@@ -235,29 +240,29 @@ public class ExcelService
         return result;
     }
 
-    private (List<KhachHang> khachHangs, List<GiaoDich> giaoDichs, List<TraNo> traNos) ImportBaoCaoFromTable(DataTable dt)
+    private (List<KhachHang> khachHangs, List<GiaoDich> giaoDichs, List<TraNo> traNos) ImportBaoCao(List<object?[]> rows)
     {
         var khachHangs = new List<KhachHang>();
         var giaoDichs = new List<GiaoDich>();
         var traNos = new List<TraNo>();
 
         var dates = new List<DateTime>();
-        if (dt.Rows.Count > 2)
+        if (rows.Count > 2)
         {
-            var row3 = dt.Rows[2];
-            for (int c = 4; c < dt.Columns.Count; c += 2) // 1-based col 4 = index 3
+            var row3 = rows[2];
+            for (int c = 4; c < row3.Length; c += 2) // 1-based col 4 = index 3
             {
                 var cell = row3[c - 1]; // 0-based index
-                if (cell == null || cell == DBNull.Value) continue;
+                if (cell == null) continue;
                 if (cell is DateTime dt2) { dates.Add(dt2.Date); continue; }
                 if (cell is double d) { dates.Add(DateTime.FromOADate(d).Date); continue; }
                 if (DateTime.TryParse(cell.ToString(), out var parsed)) dates.Add(parsed.Date);
             }
         }
 
-        for (int r = 4; r < dt.Rows.Count; r++) // data from row 5 (index 4)
+        for (int r = 4; r < rows.Count; r++) // data from row 5 (index 4)
         {
-            var row = dt.Rows[r];
+            var row = rows[r];
             string tenKhach = GetStr(row, 1);
             if (string.IsNullOrEmpty(tenKhach)) continue;
             if (tenKhach.StartsWith("TỔNG", StringComparison.OrdinalIgnoreCase) ||
