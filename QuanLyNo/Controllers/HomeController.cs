@@ -1200,7 +1200,7 @@ public class HomeController : Controller
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { return Json(new { ok = false, error = ex.Message }); }
-        finally { try { if (File.Exists(tmp)) File.Delete(tmp); } catch { } }
+        finally { try { if (System.IO.File.Exists(tmp)) System.IO.File.Delete(tmp); } catch { } }
     }
 
     [HttpPost]
