@@ -1250,6 +1250,8 @@ document.addEventListener('DOMContentLoaded', function () {
     // ===== DUAL PANEL: Gộp Excel + Ảnh thành một bảng thống nhất =====
     (function () {
         var dp = { excelRows: [], imageRows: [], merged: [] };
+        var excelUploadRun = 0;
+        var imageUploadRun = 0;
 
         function dpLoai() { var e = document.getElementById('dpLoai'); return e ? e.value : 'NhapNoMoi'; }
         function dpNgay() {
@@ -1261,7 +1263,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!btnSave) return;
 
         document.getElementById('dpExcelFile').addEventListener('change', function () {
-            if (this.files && this.files[0]) dpUploadExcel(this.files[0]);
+            if (this.files && this.files.length) dpUploadExcels(Array.from(this.files));
             this.value = '';
         });
         document.getElementById('dpImageFiles').addEventListener('change', function () {
@@ -1269,16 +1271,24 @@ document.addEventListener('DOMContentLoaded', function () {
             this.value = '';
         });
         document.getElementById('dpExcelReset').addEventListener('click', function () {
+            excelUploadRun++;
             dp.excelRows = []; dp.merged = [];
             document.getElementById('dpExcelStatus').textContent = 'Chưa có file';
-            dpMsg('dpExcelMsg', '', ''); dpRenderMergedPlaceholder(); dpUpdateSave();
+            dpMsg('dpExcelMsg', '', '');
+            if (dp.imageRows.length) dpRunMerge();
+            else { dpRenderMergedPlaceholder(); dpUpdateSave(); }
         });
         document.getElementById('dpImageReset').addEventListener('click', function () {
+            imageUploadRun++;
             dp.imageRows = []; dp.merged = [];
             document.getElementById('dpImageStatus').textContent = 'Chưa có ảnh';
-            dpMsg('dpImageMsg', '', ''); dpRenderMergedPlaceholder(); dpUpdateSave();
+            dpMsg('dpImageMsg', '', '');
+            if (dp.excelRows.length) dpRunMerge();
+            else { dpRenderMergedPlaceholder(); dpUpdateSave(); }
         });
         document.getElementById('dpBtnReset').addEventListener('click', function () {
+            excelUploadRun++;
+            imageUploadRun++;
             dp.excelRows = []; dp.imageRows = []; dp.merged = [];
             document.getElementById('dpExcelStatus').textContent = 'Chưa có file';
             document.getElementById('dpImageStatus').textContent = 'Chưa có ảnh';
@@ -1289,7 +1299,15 @@ document.addEventListener('DOMContentLoaded', function () {
         });
         btnSave.addEventListener('click', dpSave);
         document.getElementById('dpLoai').addEventListener('change', function () {
-            if (!dp.excelRows.length && !dp.imageRows.length) return;
+            excelUploadRun++;
+            imageUploadRun++;
+            if (!dp.excelRows.length && !dp.imageRows.length) {
+                document.getElementById('dpExcelStatus').textContent = 'Chưa có file';
+                document.getElementById('dpImageStatus').textContent = 'Chưa có ảnh';
+                dpMsg('dpExcelMsg', '', '');
+                dpMsg('dpImageMsg', '', '');
+                return;
+            }
             dp.excelRows = []; dp.imageRows = []; dp.merged = [];
             document.getElementById('dpExcelStatus').textContent = 'Chưa có file';
             document.getElementById('dpImageStatus').textContent = 'Chưa có ảnh';
@@ -1370,48 +1388,113 @@ document.addEventListener('DOMContentLoaded', function () {
             dp.merged = merged;
         }
 
-        // ---- Upload Excel ----
-        function dpUploadExcel(file) {
-            dpMsg('dpExcelMsg', 'info', '<span class="spinner-border spinner-border-sm me-1"></span>Đang đọc Excel...');
-            document.getElementById('dpExcelStatus').textContent = file.name;
-            var fd = new FormData();
-            fd.append('file', file); fd.append('ngay', dpNgay()); fd.append('loai', dpLoai());
-            fetch('/Home/ParseExcelPreview', { method: 'POST', body: fd })
-                .then(function (r) { return r.json(); })
-                .then(function (d) {
-                    if (d.ok) {
-                        dp.excelRows = d.rows || [];
-                        document.getElementById('dpExcelStatus').textContent = file.name + ' (' + dp.excelRows.length + ' dòng)';
-                        dpMsg('dpExcelMsg', dp.excelRows.length ? 'success' : 'warning',
-                            dp.excelRows.length ? 'Đọc được ' + dp.excelRows.length + ' dòng.' : 'Không đọc được dòng nào.');
-                        dpRunMerge();
+        // ---- Upload multiple Excel files (one by one, then merge all rows) ----
+        async function dpUploadExcels(files) {
+            var runId = ++excelUploadRun;
+            var selectedType = dpLoai();
+            var errors = [];
+            var successfulFiles = 0;
+            dp.excelRows = [];
+            dp.merged = [];
+            if (dp.imageRows.length) dpRunMerge();
+            else { dpRenderMergedPlaceholder(); dpUpdateSave(); }
+
+            for (var i = 0; i < files.length; i++) {
+                if (runId !== excelUploadRun) return;
+
+                var file = files[i];
+                document.getElementById('dpExcelStatus').textContent =
+                    'Đang đọc Excel ' + (i + 1) + '/' + files.length + '...';
+                dpMsg('dpExcelMsg', 'info',
+                    '<span class="spinner-border spinner-border-sm me-1"></span>Đang đọc ' +
+                    dpEsc(file.name) + ' (' + (i + 1) + '/' + files.length + ')...');
+
+                var fd = new FormData();
+                fd.append('file', file);
+                fd.append('ngay', dpNgay());
+                fd.append('loai', selectedType);
+
+                try {
+                    var response = await fetch('/Home/ParseExcelPreview', { method: 'POST', body: fd });
+                    var data = await response.json();
+                    if (runId !== excelUploadRun) return;
+
+                    if (data.ok && data.rows) {
+                        dp.excelRows = dp.excelRows.concat(data.rows);
+                        successfulFiles++;
                     } else {
-                        dpMsg('dpExcelMsg', 'danger', 'Lỗi: ' + (d.error || 'Không xác định'));
+                        errors.push(file.name + ': ' + (data.error || 'Không đọc được dữ liệu'));
                     }
-                }).catch(function (e) { dpMsg('dpExcelMsg', 'danger', 'Lỗi: ' + e.message); });
+                } catch (e) {
+                    errors.push(file.name + ': ' + e.message);
+                }
+            }
+
+            if (runId !== excelUploadRun) return;
+
+            document.getElementById('dpExcelStatus').textContent =
+                files.length + ' file Excel (' + dp.excelRows.length + ' dòng)';
+
+            var summary = 'Đọc được ' + dp.excelRows.length + ' dòng từ ' +
+                successfulFiles + '/' + files.length + ' file.';
+            if (errors.length) {
+                summary += '<br><span class="text-danger">' +
+                    errors.map(dpEsc).join('<br>') + '</span>';
+            }
+
+            dpMsg('dpExcelMsg',
+                dp.excelRows.length ? (errors.length ? 'warning' : 'success') : 'danger',
+                summary);
+            dpRunMerge();
         }
 
         // ---- Upload Images (one by one) ----
         async function dpUploadImages(files) {
+            var runId = ++imageUploadRun;
+            var selectedType = dpLoai();
+            var errors = [];
+            var successfulFiles = 0;
             dp.imageRows = [];
+            dp.merged = [];
+            if (dp.excelRows.length) dpRunMerge();
+            else { dpRenderMergedPlaceholder(); dpUpdateSave(); }
+
             for (var i = 0; i < files.length; i++) {
+                if (runId !== imageUploadRun) return;
+
                 document.getElementById('dpImageStatus').textContent = 'OCR ' + (i + 1) + '/' + files.length + '...';
                 dpMsg('dpImageMsg', 'info',
                     '<span class="spinner-border spinner-border-sm me-1"></span>OCR ảnh ' + (i + 1) + '/' + files.length + '...');
                 var fd = new FormData();
-                fd.append('file', files[i]); fd.append('loai', dpLoai());
+                fd.append('file', files[i]); fd.append('loai', selectedType);
                 try {
                     var r = await fetch('/Home/ParseImagePreview', { method: 'POST', body: fd });
                     var d = await r.json();
-                    if (d.ok && d.rows) dp.imageRows = dp.imageRows.concat(d.rows);
-                    if (!d.ok && d.error) dpMsg('dpImageMsg', 'warning', 'Ảnh ' + files[i].name + ': ' + d.error);
-                } catch (e) { dpMsg('dpImageMsg', 'warning', 'Lỗi ảnh ' + files[i].name + ': ' + e.message); }
+                    if (runId !== imageUploadRun) return;
+
+                    if (d.ok && d.rows) {
+                        dp.imageRows = dp.imageRows.concat(d.rows);
+                        successfulFiles++;
+                    } else {
+                        errors.push(files[i].name + ': ' + (d.error || 'Không đọc được dữ liệu'));
+                    }
+                } catch (e) {
+                    errors.push(files[i].name + ': ' + e.message);
+                }
             }
+
+            if (runId !== imageUploadRun) return;
+
             document.getElementById('dpImageStatus').textContent = files.length + ' ảnh (' + dp.imageRows.length + ' dòng)';
-            dpMsg('dpImageMsg', dp.imageRows.length ? 'success' : 'warning',
-                dp.imageRows.length
-                    ? 'Đọc được ' + dp.imageRows.length + ' dòng từ ' + files.length + ' ảnh.'
-                    : 'Không đọc được dòng nào.');
+            var summary = 'Đọc được ' + dp.imageRows.length + ' dòng từ ' +
+                successfulFiles + '/' + files.length + ' ảnh.';
+            if (errors.length) {
+                summary += '<br><span class="text-danger">' +
+                    errors.map(dpEsc).join('<br>') + '</span>';
+            }
+            dpMsg('dpImageMsg',
+                dp.imageRows.length ? (errors.length ? 'warning' : 'success') : 'danger',
+                summary);
             dpRunMerge();
         }
 
