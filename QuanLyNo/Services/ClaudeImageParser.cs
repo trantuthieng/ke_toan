@@ -91,8 +91,7 @@ public class ClaudeImageParser
                 return ImageParseResult.Failed("Không thể phân tích JSON từ Claude.");
 
             parsed.RawText ??= jsonText;
-            parsed.Rows ??= [];
-            return parsed;
+            return GeminiImageParser.NormalizeResult(parsed, importType);
         }
         catch (OperationCanceledException)
         {
