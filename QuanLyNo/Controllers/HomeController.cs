@@ -242,6 +242,49 @@ public class HomeController : Controller
         return RedirectToAction(nameof(Index));
     }
 
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> XoaToanBoDuLieu(string? xacNhan, DateTime? ngay)
+    {
+        if (!string.Equals(xacNhan?.Trim(), "XOA TOAN BO", StringComparison.Ordinal))
+        {
+            TempData["Error"] = "Xác nhận không đúng. Dữ liệu chưa bị xóa.";
+            return RedirectToAction(nameof(Index), new { ngay = ngay?.ToString("yyyy-MM-dd") });
+        }
+
+        await using var transaction = await _db.Database.BeginTransactionAsync();
+        try
+        {
+            await _db.ImageImportRows.ExecuteDeleteAsync();
+            await _db.ImageImportBatches.ExecuteDeleteAsync();
+            await _db.GiaoDichs.ExecuteDeleteAsync();
+            await _db.TraNos.ExecuteDeleteAsync();
+            await _db.KhachHangs.ExecuteDeleteAsync();
+            await transaction.CommitAsync();
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            TempData["Error"] = "Không thể xóa toàn bộ dữ liệu. Vui lòng thử lại.";
+            return RedirectToAction(nameof(Index), new { ngay = ngay?.ToString("yyyy-MM-dd") });
+        }
+
+        var uploadWarning = false;
+        try
+        {
+            DeleteAllUploadedFiles();
+        }
+        catch
+        {
+            uploadWarning = true;
+        }
+
+        TempData["Success"] = uploadWarning
+            ? "Đã xóa toàn bộ dữ liệu. Một số file ảnh tải lên không thể xóa."
+            : "Đã xóa toàn bộ dữ liệu.";
+        return RedirectToAction(nameof(Index));
+    }
+
     // ===== EXCEL IMPORT/EXPORT =====
 
     [HttpPost]
@@ -776,6 +819,20 @@ public class HomeController : Controller
         return string.IsNullOrWhiteSpace(configured)
             ? Path.Combine(_env.WebRootPath, "uploads")
             : configured;
+    }
+
+    private void DeleteAllUploadedFiles()
+    {
+        var uploadsRoot = Path.GetFullPath(GetUploadsRoot());
+        if (!Directory.Exists(uploadsRoot))
+            return;
+
+        foreach (var filePath in Directory.EnumerateFiles(uploadsRoot, "*", SearchOption.AllDirectories))
+            System.IO.File.Delete(filePath);
+
+        foreach (var directoryPath in Directory.EnumerateDirectories(uploadsRoot, "*", SearchOption.AllDirectories)
+                     .OrderByDescending(path => path.Length))
+            Directory.Delete(directoryPath, false);
     }
 
     [HttpPost]
