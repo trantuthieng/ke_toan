@@ -16,6 +16,7 @@ public class GeminiImageParser
     public async Task<ImageParseResult> ParseAsync(string imagePath, string mimeType, string importType,
         CancellationToken cancellationToken = default)
     {
+        importType = NormalizeImportType(importType);
         var provider = _configuration["AI:Provider"] ?? Environment.GetEnvironmentVariable("AI_PROVIDER");
         if (string.Equals(provider, "Anthropic", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(provider, "Claude", StringComparison.OrdinalIgnoreCase) ||
@@ -103,8 +104,7 @@ public class GeminiImageParser
                 return ImageParseResult.Failed("Cannot parse Gemini JSON response.");
 
             parsed.RawText ??= jsonText;
-            parsed.Rows ??= new List<ImageParseRow>();
-            return parsed;
+            return NormalizeResult(parsed, importType);
         }
         catch (Exception ex)
         {
@@ -189,8 +189,7 @@ public class GeminiImageParser
                 return ImageParseResult.Failed("Cannot parse Claude JSON response.");
 
             parsed.RawText ??= jsonText;
-            parsed.Rows ??= new List<ImageParseRow>();
-            return parsed;
+            return NormalizeResult(parsed, importType);
         }
         catch (Exception ex)
         {
@@ -200,27 +199,67 @@ public class GeminiImageParser
 
     internal static string BuildPrompt(string importType)
     {
-        var isTraNo = importType == "TraNoHomNay";
-        var task = isTraNo
-            ? "ảnh trả nợ hôm nay: đọc tên khách hàng và số tiền trả"
-            : "ảnh nhập nợ mới: đọc tên khách mua và số kg từng lần mua";
+        return NormalizeImportType(importType) == "TraNoHomNay"
+            ? BuildTraNoPrompt()
+            : BuildNhapNoPrompt();
+    }
 
-        var soLuongRule = isTraNo
-            ? "- soLuongAnh: luôn null (không có cột kg trong ảnh trả nợ)."
-            : "- soLuongAnh: số kg/số lượng của dòng đó, dùng dấu chấm thập phân.";
+    internal static ImageParseResult NormalizeResult(ImageParseResult parsed, string importType)
+    {
+        var isTraNo = NormalizeImportType(importType) == "TraNoHomNay";
+        var rows = parsed.Rows ?? new List<ImageParseRow>();
 
-        var soTienRule = isTraNo
-            ? "- soTienTra: số tiền trả của dòng đó."
-            : "- soTienTra: luôn null (không có cột tiền trong ảnh nhập nợ).";
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            row.ImageOrder = row.ImageOrder > 0 ? row.ImageOrder : i + 1;
+            row.Confidence = row.Confidence.HasValue
+                ? Math.Clamp(row.Confidence.Value, 0m, 1m)
+                : null;
 
-        var schema = "{\"rawText\":null,\"rows\":[{\"imageOrder\":1,\"tenLai\":null,\"tenKhach\":\"tên khách\",\"soLuongAnh\":12.3,\"soTienTra\":null,\"confidence\":0.9,\"rawLine\":\"tên+số\"}]}";
+            if (isTraNo)
+                row.SoLuongAnh = null;
+            else
+                row.SoTienTra = null;
+        }
+
+        parsed.Rows = rows
+            .Where(row => isTraNo
+                ? !string.IsNullOrWhiteSpace(row.TenKhach) && row.SoTienTra > 0
+                : row.SoLuongAnh > 0)
+            .ToList();
+
+        if (parsed.Rows.Count == 0 && string.IsNullOrWhiteSpace(parsed.Error))
+        {
+            parsed.Error = isTraNo
+                ? "Không đọc được dòng trả nợ hợp lệ (tên khách và số tiền trả)."
+                : "Không đọc được dòng nhập nợ hợp lệ (tên khách và số kg).";
+        }
+
+        return parsed;
+    }
+
+    private static string NormalizeImportType(string? importType) =>
+        string.Equals(importType, "TraNoHomNay", StringComparison.OrdinalIgnoreCase)
+            ? "TraNoHomNay"
+            : "NhapNoMoi";
+
+    private static string BuildNhapNoPrompt()
+    {
+        const string schema =
+            "{\"rawText\":null,\"rows\":[{\"imageOrder\":1,\"tenLai\":null,\"tenKhach\":\"tên khách\",\"soLuongAnh\":12.3,\"soTienTra\":null,\"confidence\":0.9,\"rawLine\":\"tên+số kg\"}]}";
 
         return $"""
             Bạn là bộ đọc dữ liệu kế toán từ ảnh chụp sổ tay tiếng Việt viết tay.
-            Nhiệm vụ: {task}.
+            LOẠI DỮ LIỆU: NHẬP NỢ MỚI.
+            Nhiệm vụ duy nhất: đọc tên khách mua và số kg của từng lần mua.
 
             Chỉ trả về JSON hợp lệ, không markdown, theo schema:
             {schema}
+
+            QUY TẮC TRƯỜNG:
+            - soLuongAnh: bắt buộc là số kg của dòng.
+            - soTienTra: luôn null. Tuyệt đối không đưa thành tiền hoặc tiền trả vào trường này.
 
             ════ CẤU TRÚC TRANG ════
             Mỗi trang ghi nhiều khách hàng. Cấu trúc điển hình một nhóm:
@@ -255,8 +294,7 @@ public class GeminiImageParser
             - Số có dấu chấm ĐẦU: ".601", ".88", ".95" → đọc là 601, 88, 95 (dấu chấm là ký hiệu ngăn cách, KHÔNG phải thập phân).
             - Số thập phân thật: "88.3", "92,5" → đọc đúng là 88.3 / 92.5.
             - Ký tự mơ hồ (C↔6, O↔0, l↔1, n↔u): đoán theo ngữ cảnh kg hợp lý (thường 10–2000), ghi rawLine.
-            {soLuongRule}
-            {soTienRule}
+            - soLuongAnh là số kg/số lượng của dòng đó, dùng dấu chấm thập phân.
             - KHÔNG trả null cho soLuongAnh nếu dòng có số rõ ràng; không chắc thì confidence thấp, vẫn điền.
 
             ════ CHUNG ════
@@ -264,7 +302,49 @@ public class GeminiImageParser
             - rawLine: tối đa 20 ký tự, chỉ ghi tên + số chính (vd "Thúy 96", "695").
             - rawText: để null (không ghi lại toàn bộ trang — tiết kiệm token).
             - Giữ đúng thứ tự dòng từ trên xuống dưới.
-            - PHẢI đọc và trả về TẤT CẢ các dòng có số kg/tiền trong ảnh, không bỏ sót.
+            - PHẢI đọc và trả về TẤT CẢ các dòng có số kg trong ảnh, không bỏ sót.
+            """;
+    }
+
+    private static string BuildTraNoPrompt()
+    {
+        const string schema =
+            "{\"rawText\":null,\"rows\":[{\"imageOrder\":1,\"tenLai\":null,\"tenKhach\":\"tên khách\",\"soLuongAnh\":null,\"soTienTra\":150000,\"confidence\":0.9,\"rawLine\":\"tên+số tiền\"}]}";
+
+        return $"""
+            Bạn là bộ đọc dữ liệu kế toán từ ảnh chụp danh sách trả nợ tiếng Việt viết tay.
+            LOẠI DỮ LIỆU: TRẢ NỢ HÔM NAY.
+            Nhiệm vụ duy nhất: đọc tên khách hàng và SỐ TIỀN khách đã trả.
+
+            Chỉ trả về JSON hợp lệ, không markdown, theo schema:
+            {schema}
+
+            QUY TẮC BẮT BUỘC:
+            - Mỗi khoản trả nợ tạo đúng một row.
+            - tenKhach: tên khách trả tiền, giữ nguyên dấu tiếng Việt.
+            - soTienTra: số tiền trả bằng VND, là số nguyên dương.
+            - soLuongAnh: luôn null. Ảnh trả nợ không có dữ liệu kg.
+            - tenLai: luôn null, trừ khi ảnh ghi rõ "Lái:" trước tên.
+            - Không suy luận số kg, đơn giá, thành tiền bán hàng hoặc số lượng hàng.
+            - Không tự tính toán hay bù trừ số tiền. Chỉ chép đúng khoản tiền được ghi cạnh tên.
+
+            ĐỌC SỐ TIỀN:
+            - "100.000", "100,000", "100 000" → 100000.
+            - "100k", "100 K", "100 nghìn" → 100000.
+            - "1tr", "1 triệu" → 1000000; "1,5tr" → 1500000.
+            - Ký hiệu "đ", "₫", dấu chấm/phẩy phân cách hàng nghìn không được giữ trong JSON.
+            - Nếu một tên có nhiều khoản tiền riêng biệt trên nhiều dòng, tạo nhiều row cùng tenKhach.
+            - Nếu các dòng số phía dưới thuộc cùng một tên/ngoặc nhóm, kế thừa tenKhach từ đầu nhóm.
+            - Bỏ qua dòng tổng cộng, số dư, nợ còn lại, ngày tháng và số thứ tự.
+            - Không tạo row nếu không xác định được khoản tiền trả dương.
+
+            TÊN VÀ ĐỘ TIN CẬY:
+            - Bỏ ký hiệu trang trí hoặc số thứ tự đứng trước tên.
+            - Nếu tên khó đọc, vẫn ghi cách đọc tốt nhất và giảm confidence.
+            - confidence: từ 0.0 đến 1.0.
+            - rawLine: tối đa 30 ký tự, chỉ ghi tên + số tiền chính.
+            - rawText: luôn null.
+            - Giữ đúng thứ tự từ trên xuống dưới và không bỏ sót khoản trả nợ.
             """;
     }
 

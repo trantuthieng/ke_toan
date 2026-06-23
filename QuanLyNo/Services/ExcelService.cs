@@ -93,6 +93,11 @@ public class ExcelService
         return ImportGiaoDich(ReadRows(stream), ngay);
     }
 
+    public List<TraNo> ImportTraNoHangNgay(Stream stream, DateTime ngay)
+    {
+        return ImportTraNo(ReadRows(stream), ngay);
+    }
+
     public (List<KhachHang> khachHangs, List<GiaoDich> giaoDichs, List<TraNo> traNos) ImportBaoCao(Stream stream)
     {
         return ImportBaoCao(ReadRows(stream));
@@ -150,6 +155,172 @@ public class ExcelService
 
         FlushGroup(currentLai, group, allItems);
         return allItems;
+    }
+
+    private List<TraNo> ImportTraNo(List<object?[]> rows, DateTime ngay)
+    {
+        var result = new List<TraNo>();
+        var headerRow = -1;
+        var nameColumn = -1;
+        var amountColumn = -1;
+
+        for (var r = 0; r < Math.Min(rows.Count, 12); r++)
+        {
+            var candidateNameColumn = -1;
+            var candidateAmountColumn = -1;
+
+            for (var c = 0; c < rows[r].Length; c++)
+            {
+                var text = NormalizeCellText(rows[r][c]?.ToString());
+                if (candidateNameColumn < 0 &&
+                    (text.Contains("khach") || text is "ten" or "ho ten" or "ten nguoi tra"))
+                {
+                    candidateNameColumn = c;
+                }
+
+                if (candidateAmountColumn < 0 &&
+                    (text.Contains("tien tra") || text.Contains("tra no") ||
+                     text.Contains("thanh toan") || text is "tra" or "so tien"))
+                {
+                    candidateAmountColumn = c;
+                }
+            }
+
+            if (candidateNameColumn >= 0 && candidateAmountColumn >= 0)
+            {
+                headerRow = r;
+                nameColumn = candidateNameColumn;
+                amountColumn = candidateAmountColumn;
+                break;
+            }
+        }
+
+        var startRow = headerRow >= 0 ? headerRow + 1 : 0;
+        for (var r = startRow; r < rows.Count; r++)
+        {
+            var row = rows[r];
+            var tenKhach = nameColumn >= 0
+                ? GetCellString(row, nameColumn)
+                : FindLikelyCustomerName(row);
+
+            var normalizedName = NormalizeCellText(tenKhach);
+            if (string.IsNullOrWhiteSpace(tenKhach) ||
+                normalizedName.StartsWith("tong") ||
+                normalizedName.StartsWith("cong") ||
+                normalizedName is "khach" or "khach hang" or "ten" or "ho ten" or "ngay")
+            {
+                continue;
+            }
+
+            decimal soTienTra;
+            if (amountColumn >= 0)
+            {
+                soTienTra = GetMoney(GetCell(row, amountColumn));
+            }
+            else
+            {
+                soTienTra = row
+                    .Where((_, index) => index != nameColumn)
+                    .Select(GetMoney)
+                    .DefaultIfEmpty(0)
+                    .Max();
+            }
+
+            if (soTienTra <= 0)
+                continue;
+
+            result.Add(new TraNo
+            {
+                NgayTra = ngay,
+                TenKhach = tenKhach,
+                SoTienTra = Math.Round(soTienTra),
+                GhiChu = "Import từ Excel trả nợ"
+            });
+        }
+
+        return result;
+    }
+
+    private static object? GetCell(object?[] row, int zeroBasedColumn) =>
+        zeroBasedColumn >= 0 && zeroBasedColumn < row.Length ? row[zeroBasedColumn] : null;
+
+    private static string GetCellString(object?[] row, int zeroBasedColumn) =>
+        GetCell(row, zeroBasedColumn)?.ToString()?.Trim() ?? "";
+
+    private static string FindLikelyCustomerName(object?[] row)
+    {
+        foreach (var value in row)
+        {
+            var text = value?.ToString()?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(text) || decimal.TryParse(text, out _))
+                continue;
+
+            var normalized = NormalizeCellText(text);
+            if (normalized.Any(char.IsLetter) &&
+                !normalized.Contains("ngay") &&
+                !normalized.Contains("tien") &&
+                !normalized.Contains("tra no"))
+            {
+                return text;
+            }
+        }
+
+        return "";
+    }
+
+    private static decimal GetMoney(object? value)
+    {
+        if (value == null) return 0;
+        if (value is DateTime) return 0;
+        if (value is decimal decimalValue) return decimalValue;
+        if (value is double doubleValue) return (decimal)doubleValue;
+        if (value is float floatValue) return (decimal)floatValue;
+        if (value is int intValue) return intValue;
+        if (value is long longValue) return longValue;
+
+        var text = value.ToString()?.Trim().ToLowerInvariant() ?? "";
+        if (string.IsNullOrWhiteSpace(text)) return 0;
+        if ((text.Contains('/') || text.Contains('-')) && DateTime.TryParse(text, out _))
+            return 0;
+
+        decimal multiplier = 1;
+        var normalizedText = NormalizeCellText(text);
+        if (normalizedText.Contains("trieu") ||
+            System.Text.RegularExpressions.Regex.IsMatch(normalizedText, @"\d(?:[.,]\d+)?\s*tr\b"))
+            multiplier = 1_000_000;
+        else if (normalizedText.Contains("nghin") ||
+                 System.Text.RegularExpressions.Regex.IsMatch(normalizedText, @"\d(?:[.,]\d+)?\s*k\b"))
+            multiplier = 1_000;
+
+        var numeric = new string(text
+            .Where(c => char.IsDigit(c) || c is '.' or ',' or '-')
+            .ToArray());
+        if (string.IsNullOrWhiteSpace(numeric)) return 0;
+
+        if (multiplier > 1)
+        {
+            numeric = numeric.Replace(',', '.');
+            if (decimal.TryParse(numeric, NumberStyles.Number, CultureInfo.InvariantCulture, out var shortAmount))
+                return shortAmount * multiplier;
+        }
+
+        numeric = numeric.Replace(".", "").Replace(",", "");
+        return decimal.TryParse(numeric, NumberStyles.Integer, CultureInfo.InvariantCulture, out var amount)
+            ? amount
+            : 0;
+    }
+
+    private static string NormalizeCellText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "";
+
+        var normalized = value.Trim().ToLowerInvariant()
+            .Replace('đ', 'd')
+            .Normalize(System.Text.NormalizationForm.FormD);
+        return new string(normalized
+            .Where(c => System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) !=
+                        System.Globalization.UnicodeCategory.NonSpacingMark)
+            .ToArray());
     }
 
     private bool IsKhachHangLaiFormat(List<object?[]> rows)

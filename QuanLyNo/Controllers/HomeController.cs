@@ -1213,17 +1213,44 @@ public class HomeController : Controller
             using var stream = new MemoryStream();
             await file.CopyToAsync(stream);
             stream.Position = 0;
-            var rows = _excel.ImportGiaoDichHangNgay(stream, ParseDateOrToday(ngay));
+
+            var date = ParseDateOrToday(ngay);
+            var isTraNo = string.Equals(loai, ImageImportTypes.TraNoHomNay,
+                StringComparison.OrdinalIgnoreCase);
+            if (isTraNo)
+            {
+                var traNoRows = _excel.ImportTraNoHangNgay(stream, date);
+                return Json(new
+                {
+                    ok = traNoRows.Count > 0,
+                    count = traNoRows.Count,
+                    loai = ImageImportTypes.TraNoHomNay,
+                    rows = traNoRows.Select((r, i) => new
+                    {
+                        idx = i, tenLai = r.TenLai ?? "", tenKhach = r.TenKhach,
+                        soTienTra = r.SoTienTra, ghiChu = r.GhiChu ?? ""
+                    }),
+                    error = traNoRows.Count == 0
+                        ? "Không đọc được dòng trả nợ nào. File cần có tên khách và số tiền trả."
+                        : null
+                });
+            }
+
+            var rows = _excel.ImportGiaoDichHangNgay(stream, date);
             return Json(new
             {
-                ok = true,
+                ok = rows.Count > 0,
                 count = rows.Count,
+                loai = ImageImportTypes.NhapNoMoi,
                 rows = rows.Select((r, i) => new
                 {
                     idx = i, tenLai = r.TenLai ?? "", tenKhach = r.TenKhach ?? "",
                     soCon = r.SoCon, soLuong = r.SoLuong, gia = r.Gia,
                     thanhTien = r.ThanhTien, tienTraLai = r.TienTraLai, ghiChu = r.GhiChu ?? ""
-                })
+                }),
+                error = rows.Count == 0
+                    ? "Không đọc được dòng nhập nợ nào. File cần có tên khách và số kg."
+                    : null
             });
         }
         catch (Exception ex) { return Json(new { ok = false, error = "Lỗi đọc Excel: " + ex.Message }); }
@@ -1235,7 +1262,10 @@ public class HomeController : Controller
         if (file == null || file.Length == 0)
             return Json(new { ok = false, error = "Chưa chọn ảnh." });
 
-        var loaiImport = string.IsNullOrEmpty(loai) ? ImageImportTypes.NhapNoMoi : loai;
+        var loaiImport = string.Equals(loai, ImageImportTypes.TraNoHomNay,
+            StringComparison.OrdinalIgnoreCase)
+            ? ImageImportTypes.TraNoHomNay
+            : ImageImportTypes.NhapNoMoi;
         var parser = new GeminiImageParser(_configuration);
         var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
         var tmp = Path.Combine(Path.GetTempPath(), $"ocrp_{Guid.NewGuid()}{ext}");
@@ -1245,11 +1275,13 @@ public class HomeController : Controller
                 await file.CopyToAsync(fs, ct);
 
             var parsed = await parser.ParseAsync(tmp, file.ContentType, loaiImport, ct);
+            var parsedRows = parsed.Rows ?? new List<ImageParseRow>();
             return Json(new
             {
-                ok = true,
-                count = parsed.Rows?.Count ?? 0,
-                rows = parsed.Rows?.Select(r => new
+                ok = parsed.IsConfigured && string.IsNullOrWhiteSpace(parsed.Error) && parsedRows.Count > 0,
+                count = parsedRows.Count,
+                loai = loaiImport,
+                rows = parsedRows.Select(r => new
                 {
                     fileName = file.FileName, imageOrder = r.ImageOrder,
                     tenLai = r.TenLai ?? "", tenKhach = r.TenKhach ?? "",
