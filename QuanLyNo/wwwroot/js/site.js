@@ -1252,7 +1252,6 @@ document.addEventListener('DOMContentLoaded', function () {
         var dp = { excelRows: [], imageRows: [], merged: [] };
 
         function dpLoai() { var e = document.getElementById('dpLoai'); return e ? e.value : 'NhapNoMoi'; }
-        function dpNguon() { var e = document.getElementById('dpNguon'); return e ? e.value : 'BH1'; }
         function dpNgay() {
             var e = document.querySelector('input[name="ngay"]');
             return e ? e.value : new Date().toISOString().slice(0, 10);
@@ -1290,7 +1289,12 @@ document.addEventListener('DOMContentLoaded', function () {
         });
         btnSave.addEventListener('click', dpSave);
         document.getElementById('dpLoai').addEventListener('change', function () {
-            if (dp.excelRows.length || dp.imageRows.length) dpRunMerge();
+            if (!dp.excelRows.length && !dp.imageRows.length) return;
+            dp.excelRows = []; dp.imageRows = []; dp.merged = [];
+            document.getElementById('dpExcelStatus').textContent = 'Chưa có file';
+            document.getElementById('dpImageStatus').textContent = 'Chưa có ảnh';
+            dpMsg('dpExcelMsg', '', ''); dpMsg('dpImageMsg', '', ''); dpMsg('dpSaveMsg', '', '');
+            dpRenderMergedPlaceholder(); dpUpdateSave();
         });
 
         // ---- Fuzzy matching ----
@@ -1540,7 +1544,7 @@ document.addEventListener('DOMContentLoaded', function () {
             fetch('/Home/SaveDualPanelResult', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ngay: dpNgay(), loai: dpLoai(), nguonBanHang: dpNguon(), rows: rows })
+                body: JSON.stringify({ ngay: dpNgay(), loai: dpLoai(), rows: rows })
             }).then(function (r) { return r.json(); })
             .then(function (d) {
                 if (d.ok) {
