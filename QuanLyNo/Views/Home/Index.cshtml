@@ -58,6 +58,9 @@
         <button class="btn btn-sm btn-outline-info" data-bs-toggle="modal" data-bs-target="#khachHangModal">
             <i class="bi bi-person-plus"></i> Thêm khách
         </button>
+        <button class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#deleteAllModal">
+            <i class="bi bi-trash3"></i> Xóa toàn bộ
+        </button>
     </div>
 </div>
 
@@ -573,6 +576,46 @@
     </div>
 </div>
 
+<!-- MODAL: XÓA TOÀN BỘ DỮ LIỆU -->
+<div class="modal fade" id="deleteAllModal" tabindex="-1" aria-labelledby="deleteAllModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content border-danger">
+            <form asp-action="XoaToanBoDuLieu" method="post" id="deleteAllForm">
+                <input type="hidden" name="ngay" value="@todayIso" />
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title" id="deleteAllModalLabel">
+                        <i class="bi bi-exclamation-triangle"></i> Xóa toàn bộ dữ liệu
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-danger">
+                        Thao tác này sẽ xóa vĩnh viễn toàn bộ giao dịch, trả nợ, khách hàng,
+                        dữ liệu import và ảnh đã tải lên. Không thể hoàn tác.
+                    </div>
+                    <label for="deleteAllConfirmation" class="form-label">
+                        Nhập chính xác <strong>XOA TOAN BO</strong> để xác nhận:
+                    </label>
+                    <input type="text"
+                           class="form-control"
+                           id="deleteAllConfirmation"
+                           name="xacNhan"
+                           autocomplete="off"
+                           spellcheck="false"
+                           required />
+                    <div class="form-text">Chỉ nút xóa mới được bật khi nội dung xác nhận chính xác.</div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
+                    <button type="submit" class="btn btn-danger" id="deleteAllSubmit" disabled>
+                        <i class="bi bi-trash3"></i> Xóa toàn bộ dữ liệu
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <!-- MODAL: IMPORT EXCEL -->
 <div class="modal fade" id="importModal" tabindex="-1">
     <div class="modal-dialog">
@@ -605,6 +648,27 @@
         </div>
     </div>
 </div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const modal = document.getElementById('deleteAllModal');
+        const confirmation = document.getElementById('deleteAllConfirmation');
+        const submit = document.getElementById('deleteAllSubmit');
+
+        function updateDeleteButton() {
+            submit.disabled = confirmation.value.trim() !== 'XOA TOAN BO';
+        }
+
+        confirmation.addEventListener('input', updateDeleteButton);
+        modal.addEventListener('shown.bs.modal', function () {
+            confirmation.focus();
+        });
+        modal.addEventListener('hidden.bs.modal', function () {
+            confirmation.value = '';
+            updateDeleteButton();
+        });
+    });
+</script>
 
 <!-- MODAL: THÊM KHÁCH HÀNG -->
 <div class="modal fade" id="khachHangModal" tabindex="-1">
