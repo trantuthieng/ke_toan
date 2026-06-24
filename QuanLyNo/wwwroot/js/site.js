@@ -1249,9 +1249,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // ===== DUAL PANEL: Gộp Excel + Ảnh thành một bảng thống nhất =====
     (function () {
-        var dp = { excelRows: [], imageRows: [], merged: [] };
+        var dp = { excelRows: [], imageRows: [], merged: [], aiMatches: [] };
         var excelUploadRun = 0;
         var imageUploadRun = 0;
+        var aiMatchRun = 0;
 
         function dpLoai() { var e = document.getElementById('dpLoai'); return e ? e.value : 'NhapNoMoi'; }
         function dpNgay() {
@@ -1261,6 +1262,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         var btnSave = document.getElementById('dpBtnSave');
         if (!btnSave) return;
+        var btnAiMatch = document.getElementById('dpBtnAiMatch');
 
         document.getElementById('dpExcelFile').addEventListener('change', function () {
             if (this.files && this.files.length) dpUploadExcels(Array.from(this.files));
@@ -1272,46 +1274,54 @@ document.addEventListener('DOMContentLoaded', function () {
         });
         document.getElementById('dpExcelReset').addEventListener('click', function () {
             excelUploadRun++;
-            dp.excelRows = []; dp.merged = [];
+            aiMatchRun++;
+            dp.excelRows = []; dp.merged = []; dp.aiMatches = [];
             document.getElementById('dpExcelStatus').textContent = 'Chưa có file';
             dpMsg('dpExcelMsg', '', '');
+            dpMsg('dpAiMsg', '', '');
             if (dp.imageRows.length) dpRunMerge();
             else { dpRenderMergedPlaceholder(); dpUpdateSave(); }
         });
         document.getElementById('dpImageReset').addEventListener('click', function () {
             imageUploadRun++;
-            dp.imageRows = []; dp.merged = [];
+            aiMatchRun++;
+            dp.imageRows = []; dp.merged = []; dp.aiMatches = [];
             document.getElementById('dpImageStatus').textContent = 'Chưa có ảnh';
             dpMsg('dpImageMsg', '', '');
+            dpMsg('dpAiMsg', '', '');
             if (dp.excelRows.length) dpRunMerge();
             else { dpRenderMergedPlaceholder(); dpUpdateSave(); }
         });
         document.getElementById('dpBtnReset').addEventListener('click', function () {
             excelUploadRun++;
             imageUploadRun++;
-            dp.excelRows = []; dp.imageRows = []; dp.merged = [];
+            aiMatchRun++;
+            dp.excelRows = []; dp.imageRows = []; dp.merged = []; dp.aiMatches = [];
             document.getElementById('dpExcelStatus').textContent = 'Chưa có file';
             document.getElementById('dpImageStatus').textContent = 'Chưa có ảnh';
-            dpMsg('dpExcelMsg', '', ''); dpMsg('dpImageMsg', '', ''); dpMsg('dpSaveMsg', '', '');
+            dpMsg('dpExcelMsg', '', ''); dpMsg('dpImageMsg', '', ''); dpMsg('dpAiMsg', '', ''); dpMsg('dpSaveMsg', '', '');
             dpRenderMergedPlaceholder(); dpHideSummary(); dpUpdateSave();
             var b = document.getElementById('dpBtnSave');
             b.className = 'btn btn-sm btn-success'; b.innerHTML = '<i class="bi bi-check-circle"></i> Xác nhận &amp; Lưu';
         });
         btnSave.addEventListener('click', dpSave);
+        if (btnAiMatch) btnAiMatch.addEventListener('click', function () { dpRunAiMatch(false); });
         document.getElementById('dpLoai').addEventListener('change', function () {
             excelUploadRun++;
             imageUploadRun++;
+            aiMatchRun++;
             if (!dp.excelRows.length && !dp.imageRows.length) {
                 document.getElementById('dpExcelStatus').textContent = 'Chưa có file';
                 document.getElementById('dpImageStatus').textContent = 'Chưa có ảnh';
                 dpMsg('dpExcelMsg', '', '');
                 dpMsg('dpImageMsg', '', '');
+                dpMsg('dpAiMsg', '', '');
                 return;
             }
-            dp.excelRows = []; dp.imageRows = []; dp.merged = [];
+            dp.excelRows = []; dp.imageRows = []; dp.merged = []; dp.aiMatches = [];
             document.getElementById('dpExcelStatus').textContent = 'Chưa có file';
             document.getElementById('dpImageStatus').textContent = 'Chưa có ảnh';
-            dpMsg('dpExcelMsg', '', ''); dpMsg('dpImageMsg', '', ''); dpMsg('dpSaveMsg', '', '');
+            dpMsg('dpExcelMsg', '', ''); dpMsg('dpImageMsg', '', ''); dpMsg('dpAiMsg', '', ''); dpMsg('dpSaveMsg', '', '');
             dpRenderMergedPlaceholder(); dpUpdateSave();
         });
 
@@ -1340,35 +1350,81 @@ document.addEventListener('DOMContentLoaded', function () {
             return 1 - d / Math.max(na.length, nb.length);
         }
 
+        function dpBuildMergedRow(er, ir, match) {
+            var isT = dpLoai() === 'TraNoHomNay';
+            var conflict = ir && (isT
+                ? Math.abs((+er.soTienTra || 0) - (+ir.soTienTra || 0)) > 1000
+                : Math.abs((+er.soLuong || 0) - (+ir.soLuongAnh || 0)) > 0.1);
+
+            return {
+                source: ir ? 'both' : 'excel',
+                tenLai: er.tenLai || '', tenKhach: er.tenKhach || '',
+                soLuong: er.soLuong || 0, gia: er.gia || 0,
+                thanhTien: er.thanhTien || 0, tienTraLai: er.tienTraLai || 0,
+                soCon: er.soCon || 0, soTienTra: er.soTienTra || 0,
+                soLuongAnh: ir ? ir.soLuongAnh : null,
+                soTienTraAnh: ir ? ir.soTienTra : null,
+                confidenceAnh: ir ? ir.confidence : null,
+                sim: match ? (match.confidence || match.sim || 0) : 0,
+                matchMethod: match ? match.method : 'none',
+                matchConfidence: match ? match.confidence : null,
+                matchReason: match ? (match.reason || '') : '',
+                hasConflict: !!conflict
+            };
+        }
+
+        function dpBuildAiMatchIndex() {
+            var usedExcel = new Set();
+            var usedImg = new Set();
+            var byExcel = new Map();
+
+            (dp.aiMatches || [])
+                .slice()
+                .sort(function (a, b) { return (+b.confidence || 0) - (+a.confidence || 0); })
+                .forEach(function (m) {
+                    var ei = +m.excelIndex;
+                    var ii = +m.imageIndex;
+                    if (!Number.isInteger(ei) || !Number.isInteger(ii)) return;
+                    if (ei < 0 || ei >= dp.excelRows.length) return;
+                    if (ii < 0 || ii >= dp.imageRows.length) return;
+                    if (usedExcel.has(ei) || usedImg.has(ii)) return;
+
+                    usedExcel.add(ei);
+                    usedImg.add(ii);
+                    byExcel.set(ei, {
+                        imageIndex: ii,
+                        confidence: +m.confidence || 0.7,
+                        reason: m.reason || '',
+                        method: 'ai'
+                    });
+                });
+
+            return { byExcel: byExcel, usedImg: usedImg };
+        }
+
         // ---- Merge Excel + Image into unified rows ----
         function dpMerge() {
-            var isT = dpLoai() === 'TraNoHomNay';
             var merged = [];
-            var usedImg = new Set();
+            var aiIndex = dpBuildAiMatchIndex();
+            var usedImg = aiIndex.usedImg;
 
-            dp.excelRows.forEach(function (er) {
+            dp.excelRows.forEach(function (er, ei) {
+                var aiMatch = aiIndex.byExcel.get(ei);
+                if (aiMatch) {
+                    merged.push(dpBuildMergedRow(er, dp.imageRows[aiMatch.imageIndex], aiMatch));
+                    return;
+                }
+
                 var best = -1, bestSim = 0;
                 dp.imageRows.forEach(function (ir, ii) {
                     if (usedImg.has(ii)) return;
                     var s = dpSim(er.tenKhach, ir.tenKhach);
                     if (s > bestSim) { bestSim = s; best = ii; }
                 });
+
                 var ir = best >= 0 && bestSim >= 0.45 ? dp.imageRows[best] : null;
                 if (ir) usedImg.add(best);
-                var conflict = ir && (isT
-                    ? Math.abs((+er.soTienTra || 0) - (+ir.soTienTra || 0)) > 1000
-                    : Math.abs((+er.soLuong || 0) - (+ir.soLuongAnh || 0)) > 0.1);
-                merged.push({
-                    source: ir ? 'both' : 'excel',
-                    tenLai: er.tenLai || '', tenKhach: er.tenKhach || '',
-                    soLuong: er.soLuong || 0, gia: er.gia || 0,
-                    thanhTien: er.thanhTien || 0, tienTraLai: er.tienTraLai || 0,
-                    soCon: er.soCon || 0, soTienTra: er.soTienTra || 0,
-                    soLuongAnh: ir ? ir.soLuongAnh : null,
-                    soTienTraAnh: ir ? ir.soTienTra : null,
-                    confidenceAnh: ir ? ir.confidence : null,
-                    sim: bestSim, hasConflict: !!conflict
-                });
+                merged.push(dpBuildMergedRow(er, ir, ir ? { method: 'auto', sim: bestSim, confidence: bestSim } : null));
             });
 
             // Image-only rows (no Excel match)
@@ -1381,7 +1437,9 @@ document.addEventListener('DOMContentLoaded', function () {
                     thanhTien: 0, tienTraLai: 0, soCon: 0,
                     soTienTra: ir.soTienTra || 0,
                     soLuongAnh: ir.soLuongAnh, soTienTraAnh: ir.soTienTra,
-                    confidenceAnh: ir.confidence, sim: 0, hasConflict: false
+                    confidenceAnh: ir.confidence, sim: 0,
+                    matchMethod: 'none', matchConfidence: null, matchReason: '',
+                    hasConflict: false
                 });
             });
 
@@ -1394,8 +1452,11 @@ document.addEventListener('DOMContentLoaded', function () {
             var selectedType = dpLoai();
             var errors = [];
             var successfulFiles = 0;
+            aiMatchRun++;
             dp.excelRows = [];
             dp.merged = [];
+            dp.aiMatches = [];
+            dpMsg('dpAiMsg', '', '');
             if (dp.imageRows.length) dpRunMerge();
             else { dpRenderMergedPlaceholder(); dpUpdateSave(); }
 
@@ -1446,6 +1507,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 dp.excelRows.length ? (errors.length ? 'warning' : 'success') : 'danger',
                 summary);
             dpRunMerge();
+            if (dp.excelRows.length && dp.imageRows.length) dpRunAiMatch(true);
         }
 
         // ---- Upload Images (one by one) ----
@@ -1454,8 +1516,11 @@ document.addEventListener('DOMContentLoaded', function () {
             var selectedType = dpLoai();
             var errors = [];
             var successfulFiles = 0;
+            aiMatchRun++;
             dp.imageRows = [];
             dp.merged = [];
+            dp.aiMatches = [];
+            dpMsg('dpAiMsg', '', '');
             if (dp.excelRows.length) dpRunMerge();
             else { dpRenderMergedPlaceholder(); dpUpdateSave(); }
 
@@ -1496,6 +1561,65 @@ document.addEventListener('DOMContentLoaded', function () {
                 dp.imageRows.length ? (errors.length ? 'warning' : 'success') : 'danger',
                 summary);
             dpRunMerge();
+            if (dp.excelRows.length && dp.imageRows.length) dpRunAiMatch(true);
+        }
+
+        // ---- Ask LLM to suggest smarter Excel/OCR pairings ----
+        async function dpRunAiMatch(auto) {
+            if (!dp.excelRows.length || !dp.imageRows.length) {
+                if (!auto) dpMsg('dpAiMsg', 'warning', 'Cần có cả Excel và ảnh để AI ghép.');
+                dpUpdateSave();
+                return;
+            }
+
+            var runId = ++aiMatchRun;
+            var btn = document.getElementById('dpBtnAiMatch');
+            var originalHtml = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>AI ghép...';
+            }
+            dpMsg('dpAiMsg', 'info', '<span class="spinner-border spinner-border-sm me-1"></span>AI đang ghép Excel với OCR...');
+
+            try {
+                var response = await fetch('/Home/MatchDualPanelWithAi', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        loai: dpLoai(),
+                        excelRows: dp.excelRows,
+                        imageRows: dp.imageRows
+                    })
+                });
+                var data = await response.json();
+                if (runId !== aiMatchRun) return;
+
+                if (data.ok && data.matches) {
+                    dp.aiMatches = data.matches;
+                    dpRunMerge();
+                    var count = dp.aiMatches.length;
+                    dpMsg('dpAiMsg', count ? 'success' : 'warning',
+                        count
+                            ? 'AI đã ghép ' + count + ' cặp. Dòng lệch số vẫn được tô vàng để kiểm tra.'
+                            : 'AI không tìm thấy cặp đủ chắc; đang dùng ghép tự động theo tên.');
+                } else {
+                    dp.aiMatches = [];
+                    dpRunMerge();
+                    dpMsg('dpAiMsg', 'warning',
+                        'AI chưa ghép được: ' + dpEsc(data.error || 'Không xác định') + '. Đang dùng ghép tự động theo tên.');
+                }
+            } catch (e) {
+                if (runId !== aiMatchRun) return;
+                dp.aiMatches = [];
+                dpRunMerge();
+                dpMsg('dpAiMsg', 'warning',
+                    'AI ghép bị lỗi kết nối: ' + dpEsc(e.message) + '. Đang dùng ghép tự động theo tên.');
+            } finally {
+                if (runId === aiMatchRun && btn) {
+                    btn.innerHTML = originalHtml || '<i class="bi bi-stars"></i> AI ghép';
+                    btn.disabled = !(dp.excelRows.length && dp.imageRows.length);
+                }
+            }
         }
 
         // ---- Run merge and render ----
@@ -1534,8 +1658,12 @@ document.addEventListener('DOMContentLoaded', function () {
             dp.merged.forEach(function (row, i) {
                 var trCls = row.source === 'image' ? 'table-info'
                     : row.hasConflict ? 'table-warning' : '';
+                var matchTitle = row.matchReason ? ' title="' + dpEsc(row.matchReason) + '"' : '';
+                var aiBadge = row.matchMethod === 'ai'
+                    ? ' <span class="badge bg-info text-dark" style="font-size:.68rem"' + matchTitle + '>AI</span>'
+                    : '';
                 var srcBadge = row.source === 'both'
-                    ? '<span class="badge" style="background:#6f42c1;font-size:.72rem">Excel+Ảnh</span>'
+                    ? '<span class="badge" style="background:#6f42c1;font-size:.72rem">Excel+Ảnh</span>' + aiBadge
                     : row.source === 'excel'
                         ? '<span class="badge bg-primary" style="font-size:.72rem">Excel</span>'
                         : '<span class="badge bg-success" style="font-size:.72rem">Ảnh</span>';
@@ -1603,6 +1731,8 @@ document.addEventListener('DOMContentLoaded', function () {
         function dpUpdateSave() {
             var b = document.getElementById('dpBtnSave');
             if (b) b.disabled = !dp.merged.length;
+            var ai = document.getElementById('dpBtnAiMatch');
+            if (ai) ai.disabled = !(dp.excelRows.length && dp.imageRows.length);
         }
 
         // ---- Save all merged rows ----
