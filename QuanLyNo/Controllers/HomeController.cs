@@ -15,6 +15,7 @@ namespace QuanLyNo.Controllers;
 public class HomeController : Controller
 {
     private static readonly HttpClient HttpClient = new();
+    private static readonly JsonSerializerOptions AiJsonOptions = new() { PropertyNameCaseInsensitive = true };
     private readonly AppDbContext _db;
     private readonly ExcelService _excel = new();
     private readonly IWebHostEnvironment _env;
@@ -1347,15 +1348,13 @@ public class HomeController : Controller
             {{{imageList}}}
 
             Chỉ trả JSON hợp lệ, không markdown:
-            [{"imageIndex":0,"excelIndex":1,"confidence":0.9,"reason":"lý do ngắn"}]
-            Nếu không có cặp phù hợp, trả về [].
+            {"matches":[{"imageIndex":0,"excelIndex":1,"confidence":0.9,"reason":"lý do ngắn"}]}
+            Nếu không có cặp phù hợp, trả về {"matches":[]}.
             """;
 
         try
         {
-            var text = StripJsonFence((await RunDualPanelAiPromptAsync(prompt)).Trim());
-            var aiMatches = JsonSerializer.Deserialize<List<DualPanelAiMatchResult>>(text,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
+            var aiMatches = ParseDualPanelAiMatchResults(await RunDualPanelAiPromptAsync(prompt));
 
             var usedExcel = new HashSet<int>();
             var usedImage = new HashSet<int>();
@@ -1450,6 +1449,41 @@ public class HomeController : Controller
                 }
             },
             max_output_tokens = 2048,
+            text = new
+            {
+                format = new
+                {
+                    type = "json_schema",
+                    name = "dual_panel_matches",
+                    strict = true,
+                    schema = new
+                    {
+                        type = "object",
+                        additionalProperties = false,
+                        properties = new
+                        {
+                            matches = new
+                            {
+                                type = "array",
+                                items = new
+                                {
+                                    type = "object",
+                                    additionalProperties = false,
+                                    properties = new
+                                    {
+                                        imageIndex = new { type = "integer" },
+                                        excelIndex = new { type = "integer" },
+                                        confidence = new { type = "number" },
+                                        reason = new { type = "string" }
+                                    },
+                                    required = new[] { "imageIndex", "excelIndex", "confidence", "reason" }
+                                }
+                            }
+                        },
+                        required = new[] { "matches" }
+                    }
+                }
+            },
             store = false
         };
 
@@ -1540,6 +1574,120 @@ public class HomeController : Controller
         return texts.Count > 0 ? string.Join("\n", texts).Trim() : null;
     }
 
+    private static List<DualPanelAiMatchResult> ParseDualPanelAiMatchResults(string text)
+    {
+        var json = ExtractJsonPayload(text);
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            return JsonSerializer.Deserialize<List<DualPanelAiMatchResult>>(root.GetRawText(), AiJsonOptions) ?? [];
+        }
+
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var propertyName in new[] { "matches", "result", "results", "data" })
+            {
+                if (TryGetJsonProperty(root, propertyName, out var matches) &&
+                    matches.ValueKind == JsonValueKind.Array)
+                {
+                    return JsonSerializer.Deserialize<List<DualPanelAiMatchResult>>(matches.GetRawText(), AiJsonOptions) ?? [];
+                }
+            }
+        }
+
+        throw new JsonException("AI không trả về danh sách cặp ghép dạng JSON.");
+    }
+
+    private static string ExtractJsonPayload(string text)
+    {
+        var cleaned = StripJsonFence(text.Trim());
+        if (TryParseJson(cleaned, out var parsed))
+            return parsed;
+
+        if (TryExtractBalancedJson(cleaned, '[', ']', out var arrayJson))
+            return arrayJson;
+
+        if (TryExtractBalancedJson(cleaned, '{', '}', out var objectJson))
+            return objectJson;
+
+        throw new JsonException("AI không trả về JSON hợp lệ.");
+    }
+
+    private static bool TryParseJson(string text, out string json)
+    {
+        try
+        {
+            using var _ = JsonDocument.Parse(text);
+            json = text;
+            return true;
+        }
+        catch (JsonException)
+        {
+            json = "";
+            return false;
+        }
+    }
+
+    private static bool TryExtractBalancedJson(string text, char open, char close, out string json)
+    {
+        var start = text.IndexOf(open);
+        while (start >= 0)
+        {
+            var depth = 0;
+            var inString = false;
+            var escaped = false;
+
+            for (var i = start; i < text.Length; i++)
+            {
+                var c = text[i];
+                if (inString)
+                {
+                    if (escaped)
+                    {
+                        escaped = false;
+                    }
+                    else if (c == '\\')
+                    {
+                        escaped = true;
+                    }
+                    else if (c == '"')
+                    {
+                        inString = false;
+                    }
+
+                    continue;
+                }
+
+                if (c == '"')
+                {
+                    inString = true;
+                }
+                else if (c == open)
+                {
+                    depth++;
+                }
+                else if (c == close)
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        var candidate = text[start..(i + 1)].Trim();
+                        if (TryParseJson(candidate, out json))
+                            return true;
+                        break;
+                    }
+                }
+            }
+
+            start = text.IndexOf(open, start + 1);
+        }
+
+        json = "";
+        return false;
+    }
+
     private static string StripJsonFence(string text)
     {
         var cleaned = text;
@@ -1550,11 +1698,7 @@ public class HomeController : Controller
             cleaned = nl >= 0 && last > nl ? cleaned[(nl + 1)..last].Trim() : cleaned.Trim('`').Trim();
         }
 
-        var firstArray = cleaned.IndexOf('[');
-        var lastArray = cleaned.LastIndexOf(']');
-        return firstArray >= 0 && lastArray > firstArray
-            ? cleaned[firstArray..(lastArray + 1)].Trim()
-            : cleaned;
+        return cleaned;
     }
 
     [HttpPost]
