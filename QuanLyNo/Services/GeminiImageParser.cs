@@ -18,6 +18,14 @@ public class GeminiImageParser
     {
         importType = NormalizeImportType(importType);
         var provider = _configuration["AI:Provider"] ?? Environment.GetEnvironmentVariable("AI_PROVIDER");
+        if (string.Equals(provider, "OpenAI", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(provider, "ChatGPT", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(provider, "GPT", StringComparison.OrdinalIgnoreCase) ||
+            (string.IsNullOrWhiteSpace(provider) && !HasClaudeKey() && HasOpenAiKey()))
+        {
+            return await ParseWithOpenAiAsync(imagePath, mimeType, importType, cancellationToken);
+        }
+
         if (string.Equals(provider, "Anthropic", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(provider, "Claude", StringComparison.OrdinalIgnoreCase) ||
             (string.IsNullOrWhiteSpace(provider) && HasClaudeKey()))
@@ -33,6 +41,12 @@ public class GeminiImageParser
         return !string.IsNullOrWhiteSpace(_configuration["Claude:ApiKey"])
             || !string.IsNullOrWhiteSpace(_configuration["Anthropic:ApiKey"])
             || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
+    }
+
+    private bool HasOpenAiKey()
+    {
+        return !string.IsNullOrWhiteSpace(_configuration["OpenAI:ApiKey"])
+            || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENAI_API_KEY"));
     }
 
     private async Task<ImageParseResult> ParseWithGeminiAsync(string imagePath, string mimeType, string importType,
@@ -110,6 +124,199 @@ public class GeminiImageParser
         {
             return ImageParseResult.Failed(ex.Message);
         }
+    }
+
+    private async Task<ImageParseResult> ParseWithOpenAiAsync(string imagePath, string mimeType, string importType,
+        CancellationToken cancellationToken)
+    {
+        var apiKey = _configuration["OpenAI:ApiKey"];
+        if (string.IsNullOrWhiteSpace(apiKey))
+            apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            return ImageParseResult.NotConfigured(
+                "OpenAI is not configured. Set OpenAI:ApiKey or OPENAI_API_KEY to enable OpenAI image parsing.");
+        }
+
+        var model = _configuration["OpenAI:Model"];
+        if (string.IsNullOrWhiteSpace(model))
+            model = Environment.GetEnvironmentVariable("OPENAI_MODEL");
+        if (string.IsNullOrWhiteSpace(model))
+            model = "gpt-5.4";
+
+        var imageDetail = _configuration["OpenAI:ImageDetail"];
+        if (string.IsNullOrWhiteSpace(imageDetail))
+            imageDetail = Environment.GetEnvironmentVariable("OPENAI_IMAGE_DETAIL");
+        imageDetail = NormalizeOpenAiImageDetail(imageDetail);
+
+        try
+        {
+            var bytes = await File.ReadAllBytesAsync(imagePath, cancellationToken);
+            var imageBase64 = Convert.ToBase64String(bytes);
+            var prompt = BuildPrompt(importType);
+            var parsed = await RunOpenAiImageParseAsync(apiKey, model, imageBase64, mimeType,
+                imageDetail, prompt, importType, cancellationToken);
+            var normalized = NormalizeResult(parsed, importType);
+
+            if (!ShouldReviewWithOpenAi(normalized, GetOpenAiReviewThreshold()))
+                return normalized;
+
+            var reviewModel = GetOpenAiReviewModel(model);
+            var reviewDetail = GetOpenAiReviewImageDetail();
+            var reviewPrompt = BuildOpenAiReviewPrompt(importType, normalized);
+
+            try
+            {
+                var reviewParsed = await RunOpenAiImageParseAsync(apiKey, reviewModel, imageBase64, mimeType,
+                    reviewDetail, reviewPrompt, importType, cancellationToken);
+                var reviewNormalized = NormalizeResult(reviewParsed, importType);
+
+                return reviewNormalized.Rows?.Count > 0 ? reviewNormalized : normalized;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                return normalized;
+            }
+        }
+        catch (Exception ex)
+        {
+            return ImageParseResult.Failed(ex.Message);
+        }
+    }
+
+    private async Task<ImageParseResult> RunOpenAiImageParseAsync(string apiKey, string model, string imageBase64,
+        string mimeType, string imageDetail, string prompt, string importType, CancellationToken cancellationToken)
+    {
+        var imageUrl = $"data:{NormalizeOpenAiMimeType(mimeType)};base64,{imageBase64}";
+
+        var payload = new
+        {
+            model,
+            input = new[]
+            {
+                new
+                {
+                    role = "user",
+                    content = new object[]
+                    {
+                        new { type = "input_text", text = prompt },
+                        new { type = "input_image", image_url = imageUrl, detail = imageDetail }
+                    }
+                }
+            },
+            max_output_tokens = 8000,
+            store = false
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/responses");
+        request.Headers.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+        request.Content = JsonContent.Create(payload);
+
+        using var response = await HttpClient.SendAsync(request, cancellationToken);
+        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            return ImageParseResult.Failed($"OpenAI error {(int)response.StatusCode}: {responseBody}");
+
+        var jsonText = ExtractOpenAiText(responseBody);
+        if (string.IsNullOrWhiteSpace(jsonText))
+            return ImageParseResult.Failed("OpenAI did not return JSON text.");
+
+        var parsed = JsonSerializer.Deserialize<ImageParseResult>(CleanJson(jsonText),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        if (parsed == null)
+            return ImageParseResult.Failed("Cannot parse OpenAI JSON response.");
+
+        parsed.RawText ??= jsonText;
+        return parsed;
+    }
+
+    private string GetOpenAiReviewModel(string fallbackModel)
+    {
+        var model = _configuration["OpenAI:ReviewModel"];
+        if (string.IsNullOrWhiteSpace(model))
+            model = Environment.GetEnvironmentVariable("OPENAI_REVIEW_MODEL");
+        if (string.IsNullOrWhiteSpace(model))
+            model = "gpt-5.5";
+
+        return string.IsNullOrWhiteSpace(model) ? fallbackModel : model;
+    }
+
+    private string GetOpenAiReviewImageDetail()
+    {
+        var detail = _configuration["OpenAI:ReviewImageDetail"];
+        if (string.IsNullOrWhiteSpace(detail))
+            detail = Environment.GetEnvironmentVariable("OPENAI_REVIEW_IMAGE_DETAIL");
+        if (string.IsNullOrWhiteSpace(detail))
+            detail = _configuration["OpenAI:ImageDetail"];
+        if (string.IsNullOrWhiteSpace(detail))
+            detail = Environment.GetEnvironmentVariable("OPENAI_IMAGE_DETAIL");
+
+        return NormalizeOpenAiImageDetail(string.IsNullOrWhiteSpace(detail) ? "original" : detail);
+    }
+
+    private decimal GetOpenAiReviewThreshold()
+    {
+        var raw = _configuration["OpenAI:ReviewConfidenceThreshold"];
+        if (string.IsNullOrWhiteSpace(raw))
+            raw = Environment.GetEnvironmentVariable("OPENAI_REVIEW_CONFIDENCE_THRESHOLD");
+
+        return decimal.TryParse(raw, System.Globalization.NumberStyles.Number,
+            System.Globalization.CultureInfo.InvariantCulture, out var value)
+            ? Math.Clamp(value, 0m, 1m)
+            : 0.82m;
+    }
+
+    private static bool ShouldReviewWithOpenAi(ImageParseResult parsed, decimal threshold)
+    {
+        if (threshold <= 0) return false;
+
+        var rows = parsed.Rows ?? new List<ImageParseRow>();
+        if (rows.Count == 0) return true;
+
+        return rows.Any(row => !row.Confidence.HasValue || row.Confidence.Value < threshold);
+    }
+
+    private static string BuildOpenAiReviewPrompt(string importType, ImageParseResult firstPass)
+    {
+        var firstPassRows = JsonSerializer.Serialize(new
+        {
+            rows = (firstPass.Rows ?? new List<ImageParseRow>()).Select(r => new
+            {
+                r.ImageOrder,
+                r.TenLai,
+                r.TenKhach,
+                r.SoLuongAnh,
+                r.SoTienTra,
+                r.Confidence,
+                r.RawLine
+            }),
+            firstPass.Error
+        });
+
+        return $$"""
+            {{BuildPrompt(importType)}}
+
+            ════ KIỂM TRA LẠI BẰNG MODEL MẠNH HƠN ════
+            Kết quả lần đầu có dòng confidence thấp hoặc không đọc được dòng hợp lệ.
+            Hãy đọc lại ảnh từ đầu, đặc biệt kiểm tra kỹ tên khách và số liệu.
+
+            Kết quả lần đầu chỉ để tham khảo vùng nghi ngờ, KHÔNG phải đáp án bắt buộc:
+            {{firstPassRows}}
+
+            Quy tắc review:
+            - Nếu kết quả lần đầu sai, hãy sửa theo ảnh gốc.
+            - Nếu kết quả lần đầu đúng, hãy trả lại cùng dữ liệu nhưng confidence phù hợp hơn.
+            - Không tự tính toán, không cộng/trừ/bù trừ, không suy luận ngoài ảnh.
+            - Nếu vẫn không chắc một dòng, giữ confidence thấp nhưng vẫn ghi rawLine rõ nhất có thể.
+            - Vẫn chỉ trả JSON hợp lệ theo schema ở trên, không markdown.
+            """;
     }
 
     private async Task<ImageParseResult> ParseWithClaudeAsync(string imagePath, string mimeType, string importType,
@@ -389,6 +596,40 @@ public class GeminiImageParser
         return null;
     }
 
+    private static string? ExtractOpenAiText(string responseBody)
+    {
+        using var document = JsonDocument.Parse(responseBody);
+        var root = document.RootElement;
+
+        if (root.TryGetProperty("output_text", out var outputText) &&
+            outputText.ValueKind == JsonValueKind.String)
+        {
+            return outputText.GetString();
+        }
+
+        if (!root.TryGetProperty("output", out var output) || output.ValueKind != JsonValueKind.Array)
+            return null;
+
+        var texts = new List<string>();
+        foreach (var item in output.EnumerateArray())
+        {
+            if (!item.TryGetProperty("content", out var content) ||
+                content.ValueKind != JsonValueKind.Array)
+                continue;
+
+            foreach (var part in content.EnumerateArray())
+            {
+                if (part.TryGetProperty("text", out var text) &&
+                    text.ValueKind == JsonValueKind.String)
+                {
+                    texts.Add(text.GetString() ?? "");
+                }
+            }
+        }
+
+        return texts.Count > 0 ? string.Join("\n", texts).Trim() : null;
+    }
+
     private static string NormalizeClaudeMimeType(string mimeType)
     {
         var normalized = mimeType.ToLowerInvariant();
@@ -400,18 +641,43 @@ public class GeminiImageParser
         };
     }
 
+    private static string NormalizeOpenAiMimeType(string mimeType)
+    {
+        var normalized = mimeType.ToLowerInvariant();
+        return normalized switch
+        {
+            "image/jpg" => "image/jpeg",
+            "image/jpeg" or "image/png" or "image/gif" or "image/webp" => normalized,
+            _ => "image/jpeg"
+        };
+    }
+
+    private static string NormalizeOpenAiImageDetail(string? detail)
+    {
+        return string.Equals(detail, "low", StringComparison.OrdinalIgnoreCase)
+            ? "low"
+            : string.Equals(detail, "original", StringComparison.OrdinalIgnoreCase)
+                ? "original"
+                : "high";
+    }
+
     private static string CleanJson(string text)
     {
         var trimmed = text.Trim();
-        if (!trimmed.StartsWith("```", StringComparison.Ordinal))
-            return trimmed;
+        if (trimmed.StartsWith("```", StringComparison.Ordinal))
+        {
+            var firstNewLine = trimmed.IndexOf('\n');
+            var lastFence = trimmed.LastIndexOf("```", StringComparison.Ordinal);
+            trimmed = firstNewLine >= 0 && lastFence > firstNewLine
+                ? trimmed[(firstNewLine + 1)..lastFence].Trim()
+                : trimmed.Trim('`').Trim();
+        }
 
-        var firstNewLine = trimmed.IndexOf('\n');
-        var lastFence = trimmed.LastIndexOf("```", StringComparison.Ordinal);
-        if (firstNewLine >= 0 && lastFence > firstNewLine)
-            return trimmed[(firstNewLine + 1)..lastFence].Trim();
-
-        return trimmed.Trim('`').Trim();
+        var firstObject = trimmed.IndexOf('{');
+        var lastObject = trimmed.LastIndexOf('}');
+        return firstObject >= 0 && lastObject > firstObject
+            ? trimmed[firstObject..(lastObject + 1)].Trim()
+            : trimmed;
     }
 }
 
